@@ -2,7 +2,9 @@
     Misc utils
 """
 import os
+from multiprocessing import Process
 import torch as ch
+import dill
 
 
 # Read environment variables
@@ -69,3 +71,18 @@ def meta_run_cache():
     if CACHE_PATH is None:
         raise ValueError("MIB_CACHE_SOURCE environment variable not set")
     return os.path.join(CACHE_PATH, "meta_run_cache")
+
+
+class DillProcess(Process):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._target = dill.dumps(
+            self._target
+        )  # Save the target function as bytes, using dill
+
+    def run(self):
+        if self._target:
+            self._target = dill.loads(
+                self._target
+            )  # Unpickle the target function before executing
+            self._target(*self._args, **self._kwargs)  # Execute the target function

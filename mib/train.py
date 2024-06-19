@@ -268,9 +268,11 @@ def main(save_dir: str, args):
     # Print num of params in terms of K/M/B
     print(f"Number of parameters: {num_params/1e6:.2f}M")
     del temp
-    # exit(0)
 
     save_dir_use = save_dir
+    # Also keep track of weight-decay and momentum used in model
+    save_dir_use = f"{save_dir_use}/lr_{args.momentum}_wd_{args.weight_decay}"
+
     if same_init is not None:
         save_dir_use = os.path.join(save_dir_use, f"same_init/{same_init}")
     if skip_model is not None:
@@ -345,6 +347,8 @@ def main(save_dir: str, args):
             epochs,
             pick_n=args.pick_n,
             pick_mode=args.pick_mode,
+            weight_decay=args.weight_decay,
+            opt_momentum=args.momentum,
         )
 
         # Make sure folder directory exists
@@ -398,6 +402,8 @@ if __name__ == "__main__":
     args.add_argument("--num_train", type=int, default=128, help="Number of models to train (out of num_models)")
     args.add_argument("--pick_n", type=int, default=1, help="Of all checkpoints, keep n.")
     args.add_argument("--pick_mode", type=str, default="last", help="Criteria for picking N checkpoints.")
+    args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
+    args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")
     args.add_argument(
         "--replica",
         type=int,

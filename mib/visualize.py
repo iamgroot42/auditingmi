@@ -32,21 +32,26 @@ ATTACKS_TO_PLOT = [
     # "Activations",
     # "ActivationsOffline",
     # "ProperTheoryRef",
+    "SIF_damping_0.2_lowrank_False",
     "Reference",
-    "ProperTheoryRef_damping_0.2_lowrank_False"
+    "ProperTheoryRef_damping_0.2_lowrank_False",
+    "ProperTheoryRef_approx_ihvp",
 ]
 ATTACK_MAPPING = {
     "LOSS": "LOSS",
     "Reference": "Reference",
     "ProperTheoryRef": "IHA (Ours)",
     "ProperTheoryRef_damping_0.2_lowrank_False": "IHA (Ours)",
-    "LiRAOnline": "LiRA (Online)"
+    "LiRAOnline": "LiRA",
+    "SIF_damping_0.2_lowrank_False": "SIF",
+    "ProperTheoryRef_approx_ihvp": "IHA (Ours)",
 }
 COLOR_MAPPING = {
     "IHA (Ours)": 0,
-    "LiRA (Online)": 1,
+    "LiRA": 1,
     "Reference": 2,
     "LOSS": 3,
+    "SIF": 4
 }
 
 
@@ -56,7 +61,7 @@ def main(args):
 
     info = defaultdict(list)
     for model_index in os.listdir(signals_path):
-        inside_model_index = os.path.join(signals_path, model_index)
+        inside_model_index = os.path.join(signals_path, model_index, f"lr_{args.momentum}_wd_{args.weight_decay}")
 
         for attack in os.listdir(inside_model_index):
             # Remove ".ch" from end
@@ -67,13 +72,18 @@ def main(args):
                 continue
             """
             if attack_name not in ATTACKS_TO_PLOT:
-                print("Skipping", attack_name, "...")
+                # print("Skipping", attack_name, "...")
                 continue
             # """
             data = np.load(os.path.join(inside_model_index, attack), allow_pickle=True).item()
 
             signals_in = data["in"]
             signals_out = data["out"]
+            # Accidentally forgot negative sign for FLIP signals. Will fix later, but for now just flip the signals here
+            if "SIF" in attack_name:
+                signals_in = -signals_in
+                signals_out = -signals_out
+
             total_labels = [0] * len(signals_out) + [1] * len(signals_in)
 
             total_preds = np.concatenate((signals_out, signals_in))
@@ -119,13 +129,14 @@ def main(args):
     plt.rcParams["font.family"] = "Times New Roman"
 
     # Increase font
-    plt.rcParams.update({"font.size": 14})
+    plt.rcParams.update({"font.size": 12})
     # Increase font of axes and their labels
     plt.rcParams.update({"axes.labelsize": 14})
     plt.rcParams.update({"xtick.labelsize": 14})
     plt.rcParams.update({"ytick.labelsize": 14})
 
     # Aggregate results across models
+    actually_plotted = []
     for attack_name, info_ in info.items():
         mean_auc = np.mean([i["roc_auc"] for i in info_])
         print(
@@ -145,30 +156,47 @@ def main(args):
         fprs = info_[args.which_plot]["fpr"]
         tprs = info_[args.which_plot]["tpr"]
         plt.plot(fprs, tprs, label=ATTACK_MAPPING[attack_name], c=CB_colors[COLOR_MAPPING[ATTACK_MAPPING[attack_name]]])
+        actually_plotted.append(ATTACK_MAPPING[attack_name])
 
     # Make sure plot directory exists
     if not os.path.exists(os.path.join(args.plotdir, args.dataset)):
         os.makedirs(os.path.join(args.plotdir, args.dataset))
 
     plt.legend(loc="lower right")
-    # Custom legend, list fhtm in order of COLOR_MAPPING
-    fhtm = ["IHA (Ours)", "LiRA (Online)", "Reference", "LOSS"]
-    custom_lines = [plt.Line2D([0], [0], color=CB_colors[COLOR_MAPPING[fhtm[i]]], lw=2) for i in range(len(fhtm))]
-    plt.legend(custom_lines, fhtm, loc="lower right")
+    # Custom legend, list actually_plotted in order of COLOR_MAPPING
+    custom_lines = []
+    ordered_names = []
+    for k in COLOR_MAPPING.keys():
+        if k in actually_plotted:
+            custom_lines.append(plt.Line2D([0], [0], color=CB_colors[COLOR_MAPPING[k]], lw=2))
+            ordered_names.append(k)
+    plt.legend(custom_lines, ordered_names, loc="lower right")
 
     plt.plot([0, 1], [0, 1], "r--")
     plt.xlim([0, 1])
     plt.ylim([0, 1])
     plt.ylabel("TPR")
     plt.xlabel("FPR")
-    plt.savefig(os.path.join(args.plotdir, args.dataset, f"{args.model_arch}_roc.pdf"))
+    plt.savefig(
+        os.path.join(
+            args.plotdir,
+            args.dataset,
+            f"{args.model_arch}_lr_{args.momentum}_wd_{args.weight_decay}_roc.pdf",
+        )
+    )
 
     # Also save low TPR/FPR region
     plt.xlim([1e-5, 1e0])
     plt.ylim([1e-5, 1e0])
     plt.xscale("log")
     plt.yscale("log")
-    plt.savefig(os.path.join(args.plotdir, args.dataset, f"{args.model_arch}_roc_lowfpr.pdf"))
+    plt.savefig(
+        os.path.join(
+            args.plotdir,
+            args.dataset,
+            f"{args.model_arch}_lr_{args.momentum}_wd_{args.weight_decay}_roc_lowfpr.pdf",
+        )
+    )
 
 
 if __name__ == "__main__":
@@ -177,5 +205,7 @@ if __name__ == "__main__":
     args.add_argument("--dataset", type=str, default="cifar10")
     args.add_argument("--plotdir", type=str, default="./plots")
     args.add_argument("--which_plot", type=int, default=0, help="Plot TPR-FPR curves for this specific model")
+    args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
+    args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")
     args = args.parse_args()
     main(args)

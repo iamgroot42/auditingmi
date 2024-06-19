@@ -33,9 +33,7 @@ def compute_scaled_logit(model, x, y, mse: bool = False) -> np.ndarray:
     """
     Compute scaled logit of model given datapoints
     """
-    model.cuda()
     oprediction = model(x).detach()
-    model.cpu()
     eps = 1e-45
 
     if mse:

@@ -50,6 +50,7 @@ class ProperTheoryRef(Attack):
         damping_eps = kwargs.get("damping_eps", 2e-1) # Damping (or cutoff for low-rank approximation)
         low_rank = kwargs.get("low_rank", False) # Use low-rank approximation for Hessian?
         save_compute_trick = kwargs.get("save_compute_trick", False) # Use L1 = L0 + 1/n l(z) trick to reduce iHVP calls per point from 2 to 1
+        tol = kwargs.get("tol", 1e-5) # Tolerance for CG solver (if approximate is True)
 
         if all_train_loader is None:
             raise ValueError("ProperTheoryRef requires all_train_loader to be specified")
@@ -93,6 +94,7 @@ class ProperTheoryRef(Attack):
                 test_loader=None,
                 device=self.device,
                 damp=damping_eps,
+                tol=tol,
             )
             # """
         else:
@@ -170,6 +172,7 @@ class ProperTheoryRef(Attack):
         learning_rate = kwargs.get("learning_rate", None)
         num_samples = kwargs.get("num_samples", None)
         is_train = kwargs.get("is_train", None)
+        momentum = kwargs.get("momentum", 0.0)  # Momentum used to train model
 
         if is_train is None:
             raise ValueError("ProperTheoryRef requires is_train to be specified (to compute L0 properly)")
@@ -180,7 +183,7 @@ class ProperTheoryRef(Attack):
 
         # Factor out S/(2L*) parts out of both terms as common
         grad, ret_loss = self.get_specific_grad(x, y)
-        I1 = ret_loss
+        I1 = ret_loss / (1 + momentum)
 
         if is_train:
             # Trick to skip computing L0 for all records. Compute L1 (across all data), and then directly calculate L0 using current grad

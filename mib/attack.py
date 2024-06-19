@@ -8,7 +8,6 @@ import copy
 import torch as ch
 import numpy as np
 from tqdm import tqdm
-import dill
 import multiprocessing
 import torch.multiprocessing as mp
 
@@ -16,7 +15,7 @@ from mib.models.utils import get_model
 from sklearn.metrics import roc_curve, auc
 from mib.dataset.utils import get_dataset
 from mib.attacks.utils import get_attack
-from mib.utils import get_signals_path, get_models_path, get_misc_path
+from mib.utils import get_signals_path, get_models_path, get_misc_path, DillProcess
 from mib.train import get_loader
 from sklearn.ensemble import RandomForestClassifier
 
@@ -26,21 +25,6 @@ ch.use_deterministic_algorithms(True)
 ch.backends.cudnn.deterministic = True
 ch.backends.cudnn.benchmark = False
 """
-
-
-class DillProcess(mp.Process):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._target = dill.dumps(
-            self._target
-        )  # Save the target function as bytes, using dill
-
-    def run(self):
-        if self._target:
-            self._target = dill.loads(
-                self._target
-            )  # Unpickle the target function before executing
-            self._target(*self._args, **self._kwargs)  # Execute the target function
 
 
 def member_nonmember_loaders(
@@ -181,6 +165,7 @@ def load_ref_models(model_dir, args, num_classes: int):
 
 
 def get_signals(return_dict,
+                job_index: int,
                 args,
                 attacker, loader, ds,
                 is_train: bool,
@@ -192,10 +177,14 @@ def get_signals(return_dict,
                 ref_models = None,):
     # Weird multiprocessing bug when using a dill wrapper, so need to re-import
     from tqdm import tqdm
+    import numpy as np
 
     # Compute signals for member data
     signals = []
-    for i, (x, y) in tqdm(enumerate(loader), total=len(loader)):
+    for i, (x, y) in tqdm(enumerate(loader),
+                          total=len(loader),
+                          position = job_index,
+                          desc="Member" if is_train else "Non-member"):
         out_models_use = None
         in_models_use = None
         if attacker.reference_based:
@@ -231,13 +220,15 @@ def get_signals(return_dict,
             learning_rate=learning_rate,
             num_samples=num_samples,
             is_train=is_train,
+            momentum=args.momentum,
         )
         signals.append(score)
-    return_dict["member" if is_train else "nonmember"] = signals
+    prefix = "member" if is_train else "nonmember"
+    return_dict[f"{prefix}_{job_index}"] = signals
 
 
 def main(args):
-    model_dir = os.path.join(get_models_path(), args.dataset, args.model_arch)
+    model_dir = os.path.join(get_models_path(), args.dataset, args.model_arch, f"lr_{args.momentum}_wd_{args.weight_decay}")
 
     # TODO: Get these stats from a dataset class
     ds = get_dataset(args.dataset)(augment=False)
@@ -273,25 +264,30 @@ def main(args):
         args.num_points,
         args.exp_seed,
         num_nontrain_pool=num_nontrain_pool,
-        split_each_loader=args.split_each_loader,
+        split_each_loader=args.num_parallel_each_loader,
     )
 
     hessian = None
     # If attack uses uses_hessian, try loading from disk if available
     hessian_store_path = os.path.join(
-        get_misc_path(), args.dataset, args.model_arch, str(args.target_model_index)
+        get_misc_path(),
+        args.dataset,
+        args.model_arch,
+        str(args.target_model_index),
+        f"lr_{args.momentum}_wd_{args.weight_decay}",
     )
     if os.path.exists(os.path.join(hessian_store_path, "hessian.ch")):
         hessian = ch.load(os.path.join(hessian_store_path, "hessian.ch"))
         print("Loaded Hessian!")
 
-    # Throw error if args.split_each_loader > num GPUs
-    if args.split_each_loader > ch.cuda.device_count() // 2:
-        raise ValueError("split_each_loader cannot be greater than num GPUs / 2")
+    # Repeat each entry in num_gpus by (num_parallel_each_loader * 2) times
+    num_gpus = ch.cuda.device_count()
+    gpu_assignments = np.tile(np.arange(num_gpus), args.num_parallel_each_loader * 2)
 
     # For reference-based attacks, train out models
     attackers_mem, attackers_nonmem = [], []
-    for i in range(args.split_each_loader):
+    for i in range(args.num_parallel_each_loader):
+        # Keep cycling across num-GPUs and assign each odd to mem...
         attacker_mem = get_attack(args.attack)(
             copy.deepcopy(target_model),
             criterion,
@@ -301,10 +297,12 @@ def main(args):
             low_rank=args.low_rank,
             save_compute_trick=args.save_compute_trick,
             approximate=args.approximate_ihvp,
-            device=f"cuda:{i}",
+            tol=args.cg_tol,
+            device=f"cuda:{gpu_assignments[i]}",
         )
         attackers_mem.append(attacker_mem)
 
+        # ...and each even to non-mem
         attacker_nonmem = get_attack(args.attack)(
             copy.deepcopy(target_model),
             criterion,
@@ -314,7 +312,8 @@ def main(args):
             low_rank=args.low_rank,
             approximate=args.approximate_ihvp,
             save_compute_trick=args.save_compute_trick,
-            device=f"cuda:{i+args.split_each_loader}",
+            tol=args.cg_tol,
+            device=f"cuda:{gpu_assignments[i + args.num_parallel_each_loader]}",
         )
         attackers_nonmem.append(attacker_nonmem)
 
@@ -383,15 +382,18 @@ def main(args):
     return_dict = manager.dict()
     processes = []
 
-    if args.split_each_loader == 1:
+    single_process_mode = False
+    if args.num_parallel_each_loader == 1:
+        single_process_mode = True
         member_loader = [member_loader]
         nonmember_loader = [nonmember_loader]
-    for i in range(args.split_each_loader):
+
+    for i in range(args.num_parallel_each_loader):
         # Process for member data
         p = DillProcess(
             target=get_signals,
             args=(
-                return_dict,
+                return_dict, i,
                 args,
                 attackers_mem[i],
                 member_loader[i],
@@ -411,7 +413,7 @@ def main(args):
         p = DillProcess(
             target=get_signals,
             args=(
-                return_dict,
+                return_dict, i + args.num_parallel_each_loader,
                 args,
                 attackers_nonmem[i],
                 nonmember_loader[i],
@@ -433,8 +435,13 @@ def main(args):
         p.join()
 
     # Extract relevant data
-    signals_in = return_dict["member"]
-    signals_out = return_dict["nonmember"]
+    # Everything starting with "member_" is for member data, and "nonmember_" for non-member data
+    signals_in, signals_out = [], []
+    for k, v in return_dict.items():
+        if k.startswith("member_"):
+            signals_in.extend(v)
+        else:
+            signals_out.extend(v)
 
     """
     # Compute signals for member data
@@ -517,7 +524,13 @@ def main(args):
     signals_in  = np.array(signals_in).flatten()
     signals_out = np.array(signals_out).flatten()
     signals_dir = get_signals_path()
-    save_dir = os.path.join(signals_dir, args.dataset, args.model_arch, str(args.target_model_index))
+    save_dir = os.path.join(
+        signals_dir,
+        args.dataset,
+        args.model_arch,
+        str(args.target_model_index),
+        f"lr_{args.momentum}_wd_{args.weight_decay}",
+    )
 
     # Make sure save_dir exists
     if not os.path.exists(save_dir):
@@ -652,7 +665,10 @@ if __name__ == "__main__":
     args.add_argument("--dataset", type=str, default="cifar10")
     args.add_argument("--attack", type=str, default="LOSS")
     args.add_argument("--exp_seed", type=int, default=2024)
+    args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
+    args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")
     args.add_argument("--damping_eps", type=float, default=2e-1, help="Damping for Hessian computation (only valid for some attacks)")
+    args.add_argument("--cg_tol", type=float, default=1e-5, help="Tol for iHVP in CG (when using Approx)")
     args.add_argument(
         "--approximate_ihvp",
         action="store_true",
@@ -702,7 +718,7 @@ if __name__ == "__main__":
         help="Custom suffix (folder) to load models from",
     )
     args.add_argument(
-        "--split_each_loader",
+        "--num_parallel_each_loader",
         type=int,
         default=2,
         help="Split each loader into this many parts. Use > 1 for more parallelism",

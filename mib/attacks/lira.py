@@ -14,8 +14,8 @@ class LiRAOffline(Attack):
     Offline verion of LiRA
     """
 
-    def __init__(self, model, criterion, fix_variance: bool = True):
-        super().__init__("LiRAOffline", model, criterion, reference_based=True)
+    def __init__(self, model, criterion, device: str = "cuda", fix_variance: bool = True):
+        super().__init__("LiRAOffline", model, criterion, device=device, reference_based=True)
         self.fix_variance = fix_variance
 
     @ch.no_grad()
@@ -61,10 +61,11 @@ class LiRAOnline(Attack):
     """
     Online verion of LiRA
     """
-    def __init__(self, model, criterion,  **kwargs):
+    def __init__(self, model, criterion, device: str = "cuda", **kwargs):
         fix_variance = kwargs.get("fix_variance", True)
-        super().__init__("LiRAOnline", model, criterion, reference_based=True)
+        super().__init__("LiRAOnline", model, criterion, device=device, reference_based=True)
         self.fix_variance = fix_variance
+        self.model.to(self.device)
 
     @ch.no_grad()
     def compute_scores(self, x, y, **kwargs) -> np.ndarray:
