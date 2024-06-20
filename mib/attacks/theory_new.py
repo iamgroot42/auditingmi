@@ -169,10 +169,10 @@ class ProperTheoryRef(Attack):
 
     def compute_scores(self, x, y, **kwargs) -> np.ndarray:
         x, y = x.to(self.device), y.to(self.device)
-        learning_rate = kwargs.get("learning_rate", None)
+        learning_rate = kwargs.get("learning_rate", None) # Learning rate used to train model
         num_samples = kwargs.get("num_samples", None)
-        is_train = kwargs.get("is_train", None)
-        momentum = kwargs.get("momentum", 0.0)  # Momentum used to train model
+        is_train = kwargs.get("is_train", None) 
+        momentum = kwargs.get("momentum", 0.9) # Momentum used to train model
 
         if is_train is None:
             raise ValueError("ProperTheoryRef requires is_train to be specified (to compute L0 properly)")

@@ -95,10 +95,18 @@ def member_nonmember_loaders(
     if split_each_loader > 1:
         train_index_splits = np.array_split(train_index_subset, split_each_loader)
         nonmember_index_splits = np.array_split(nonmember_index_subset, split_each_loader)
+
+        train_index_subset_, nonmember_index_subset_ = [], []
         member_loader, nonmember_loader = [], []
         for (mem_split, nonmem_split) in zip(train_index_splits, nonmember_index_splits):
+            # Save split information (for model mapping)
+            train_index_subset_.append(mem_split)
+            nonmember_index_subset_.append(nonmem_split)
+
+            # Create subset dataclass
             member_dset = ch.utils.data.Subset(train_data, mem_split)
             nonmember_dset = ch.utils.data.Subset(train_data, nonmem_split)
+            # and loaders for subsequent use
             member_loader_ = ch.utils.data.DataLoader(
                 member_dset, batch_size=batch_size, shuffle=False
             )
@@ -107,6 +115,10 @@ def member_nonmember_loaders(
             )
             member_loader.append(member_loader_)
             nonmember_loader.append(nonmember_loader_)
+        
+        # Replace back train_index_subset and nonmember_index_subset
+        train_index_subset = train_index_subset_
+        nonmember_index_subset = nonmember_index_subset_
     else:
         member_dset = ch.utils.data.Subset(train_data, train_index_subset)
         nonmember_dset = ch.utils.data.Subset(
@@ -228,14 +240,16 @@ def get_signals(return_dict,
 
 
 def main(args):
-    model_dir = os.path.join(get_models_path(), args.dataset, args.model_arch, f"lr_{args.momentum}_wd_{args.weight_decay}")
+    model_dir = os.path.join(get_models_path(),
+                             args.dataset,
+                             args.model_arch,
+                             f"lr_{args.momentum}_wd_{args.weight_decay}")
 
-    # TODO: Get these stats from a dataset class
     ds = get_dataset(args.dataset)(augment=False)
 
     # Load target model
     target_model, criterion, hparams = get_model(args.model_arch, ds.num_classes)
-    model_dict = ch.load(os.path.join(model_dir, f"{args.target_model_index}.pt"))
+    model_dict = ch.load(os.path.join(model_dir, f"{args.target_model_index}.pt"), map_location="cpu")
     target_model.load_state_dict(model_dict["model"], strict=False)
     target_model.eval()
 
@@ -246,12 +260,12 @@ def main(args):
     learning_rate = hparams['learning_rate']
     num_samples = len(train_index)
 
-    # CIFAR
+    # TODO: Get these stats from a dataset class
     num_nontrain_pool = 10000
 
     # Get data
     train_data = ds.get_train_data()
-
+    # Get data split
     (
         member_loader,
         nonmember_loader,
@@ -317,66 +331,6 @@ def main(args):
         )
         attackers_nonmem.append(attacker_nonmem)
 
-    """
-    # Register trace if required
-    if attacker.requires_trace:
-        # Compute and add trace value to model
-        mem_loader_, nonmem_loader_ = member_nonmember_loaders(
-            train_data,
-            train_index,
-            args.num_points,
-            args.exp_seed,
-            num_nontrain_pool=5000,
-            want_all_member_nonmember=True,
-            batch_size=256,
-        )
-        model_trace = compute_trace(target_model, mem_loader_, nonmem_loader_)
-        # Trace business (for theory-based attack)
-        attacker.register_trace(model_trace)
-    """
-
-    if attackers_mem[0].reference_based and not args.l_mode:
-        ref_models, ref_indices = load_ref_models(model_dir, args, ds.num_classes)
-
-        # For each reference model, look at ref_indices and create a 'isin' based 2D bool-map
-        # Using train_index_subset
-        member_map = np.zeros((len(ref_models), len(train_index_subset)), dtype=bool)
-        nonmember_map = np.zeros(
-            (len(ref_models), len(nonmember_index_subset)), dtype=bool
-        )
-        for i, out_index in enumerate(ref_indices):
-            member_map[i] = np.isin(train_index_subset, out_index)
-            nonmember_map[i] = np.isin(nonmember_index_subset, out_index)
-
-        """
-        # Compute traces, if required
-        if attackers_mem[0].requires_trace:
-            ref_traces = []
-            for m, ids in tqdm(
-                zip(ref_models, ref_indices), desc="Computing traces", total=len(ref_models)
-            ):
-                # Get in, out loaders corresponding to these models
-                mem_loader, nonmem_loader = member_nonmember_loaders(
-                    train_data,
-                    ids,
-                    args.num_points,
-                    args.exp_seed,
-                    # num_train_points=num_train_points,
-                    num_nontrain_pool=5000,
-                    want_all_member_nonmember=True,
-                    batch_size=256,
-                )
-                # Get traces corresponding to these models
-                ref_trace = compute_trace(m, mem_loader, nonmem_loader)
-                ref_traces.append(ref_trace)
-        """
-    else:
-        member_map = None
-        nonmember_map = None
-        ref_models = None
-        # Shift model to CUDA (won't have ref-based models in memory as well)
-        # target_model.cuda()
-
     # Shared dict to get reutnr values
     manager = multiprocessing.Manager()
     return_dict = manager.dict()
@@ -387,13 +341,35 @@ def main(args):
         single_process_mode = True
         member_loader = [member_loader]
         nonmember_loader = [nonmember_loader]
+        train_index_subset = [train_index_subset]
+        nonmember_index_subset = [nonmember_index_subset]
+
+    # Load up reference models
+    if attackers_mem[0].reference_based and not args.l_mode:
+        ref_models, ref_indices = load_ref_models(model_dir, args, ds.num_classes)
+    else:
+        member_map = None
+        nonmember_map = None
+        ref_models = None
 
     for i in range(args.num_parallel_each_loader):
+
+        # Select correct reference models map
+        if ref_models is not None:
+            # For each reference model, look at ref_indices and create a 'isin' based 2D bool-map
+            # Using train_index_subset
+            member_map    = np.zeros((len(ref_models), len(train_index_subset[i])),     dtype=bool)
+            nonmember_map = np.zeros((len(ref_models), len(nonmember_index_subset[i])), dtype=bool)
+            for j, out_index in enumerate(ref_indices):
+                member_map[j]    = np.isin(train_index_subset[i], out_index)
+                nonmember_map[j] = np.isin(nonmember_index_subset[i], out_index)
+
         # Process for member data
         p = DillProcess(
             target=get_signals,
             args=(
-                return_dict, i,
+                return_dict,
+                i,
                 args,
                 attackers_mem[i],
                 member_loader[i],
@@ -413,7 +389,8 @@ def main(args):
         p = DillProcess(
             target=get_signals,
             args=(
-                return_dict, i + args.num_parallel_each_loader,
+                return_dict,
+                i + args.num_parallel_each_loader,
                 args,
                 attackers_nonmem[i],
                 nonmember_loader[i],
@@ -684,7 +661,7 @@ if __name__ == "__main__":
         action="store_true",
         help="If true, use low-rank approximation of Hessian. Else, use damping. Useful for inverse",
     )
-    args.add_argument("--target_model_index", type=int, default=0)
+    args.add_argument("--target_model_index", type=int, default=0, help="Index of target model")
     args.add_argument("--num_ref_models", type=int, default=None)
     args.add_argument(
         "--simulate_metaclf",
