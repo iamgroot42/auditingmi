@@ -233,6 +233,7 @@ def get_signals(return_dict,
             num_samples=num_samples,
             is_train=is_train,
             momentum=args.momentum,
+            weight_decay=args.weight_decay
         )
         signals.append(score)
     prefix = "member" if is_train else "nonmember"
@@ -286,9 +287,8 @@ def main(args):
     hessian_store_path = os.path.join(
         get_misc_path(),
         args.dataset,
-        args.model_arch,
+        f"{args.model_arch}_lr_{args.momentum}_wd_{args.weight_decay}",
         str(args.target_model_index),
-        f"lr_{args.momentum}_wd_{args.weight_decay}",
     )
     if os.path.exists(os.path.join(hessian_store_path, "hessian.ch")):
         hessian = ch.load(os.path.join(hessian_store_path, "hessian.ch"))
@@ -305,7 +305,7 @@ def main(args):
         attacker_mem = get_attack(args.attack)(
             copy.deepcopy(target_model),
             criterion,
-            all_train_loader=get_loader(train_data, train_index, 512, num_workers=0),
+            all_train_loader=get_loader(train_data, train_index, args.hessian_batch_size, num_workers=0),
             hessian=hessian,
             damping_eps=args.damping_eps,
             low_rank=args.low_rank,
@@ -320,7 +320,7 @@ def main(args):
         attacker_nonmem = get_attack(args.attack)(
             copy.deepcopy(target_model),
             criterion,
-            all_train_loader=get_loader(train_data, train_index, 512, num_workers=0),
+            all_train_loader=get_loader(train_data, train_index, args.hessian_batch_size, num_workers=0),
             hessian=hessian,
             damping_eps=args.damping_eps,
             low_rank=args.low_rank,
@@ -504,9 +504,8 @@ def main(args):
     save_dir = os.path.join(
         signals_dir,
         args.dataset,
-        args.model_arch,
+        f"{args.model_arch}_lr_{args.momentum}_wd_{args.weight_decay}",
         str(args.target_model_index),
-        f"lr_{args.momentum}_wd_{args.weight_decay}",
     )
 
     # Make sure save_dir exists
@@ -524,7 +523,7 @@ def main(args):
     if attackers_mem[0].uses_hessian:
         attack_name += f"_damping_{args.damping_eps}_lowrank_{args.low_rank}"
     if args.approximate_ihvp:
-        attack_name += "_approx_ihvp"
+        attack_name += f"_approx_ihvp_{args.damping_eps}"
 
     if args.sif_proper_mode:
         attack_name += "_sif_proper_mode"
@@ -614,7 +613,7 @@ def main(args):
 
     fpr, tpr, _ = roc_curve(total_labels, total_preds)
     roc_auc = auc(fpr, tpr)
-    print("AUC: %.3f" % roc_auc)
+    print("\n\n\n\nAUC: %.3f" % roc_auc)
 
     # Save results
     np.save(
@@ -641,6 +640,7 @@ if __name__ == "__main__":
     args.add_argument("--model_arch", type=str, default="wide_resnet_28_2")
     args.add_argument("--dataset", type=str, default="cifar10")
     args.add_argument("--attack", type=str, default="LOSS")
+    args.add_argument("--hessian_batch_size", type=int, default=256, help="Batch size for Hessian computation")
     args.add_argument("--exp_seed", type=int, default=2024)
     args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
     args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")

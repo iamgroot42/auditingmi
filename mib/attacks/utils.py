@@ -10,7 +10,7 @@ from mib.attacks.theory import TheoryRef
 from mib.attacks.reference import Reference, ReferenceSmooth, ReferenceAlex
 from mib.attacks.activations import Activations, ActivationsOffline
 from mib.attacks.meta_audit import MetaAudit
-from mib.attacks.theory_new import ProperTheoryRef
+from mib.attacks.theory_new import IHA
 from mib.attacks.sif import SIF
 
 
@@ -33,7 +33,7 @@ ATTACK_MAPPING = {
     "Activations": Activations,
     "ActivationsOffline": ActivationsOffline,
     "MetaAudit": MetaAudit,
-    "ProperTheoryRef": ProperTheoryRef,
+    "IHA": IHA,
     "SIF": SIF,
 }
 

@@ -39,7 +39,7 @@ class MyObjective(BaseObjective):
             return self._criterion(output, batch[1])
 
 
-class ProperTheoryRef(Attack):
+class IHA(Attack):
     """
     I1 + I3 based term that makes assumption about relationship between I2 and I3.
     """
@@ -53,9 +53,9 @@ class ProperTheoryRef(Attack):
         tol = kwargs.get("tol", 1e-5) # Tolerance for CG solver (if approximate is True)
 
         if all_train_loader is None:
-            raise ValueError("ProperTheoryRef requires all_train_loader to be specified")
+            raise ValueError("IHA requires all_train_loader to be specified")
         super().__init__(
-            "ProperTheoryRef",
+            "IHA",
             model,
             criterion,
             device=device,
@@ -173,13 +173,14 @@ class ProperTheoryRef(Attack):
         num_samples = kwargs.get("num_samples", None)
         is_train = kwargs.get("is_train", None) 
         momentum = kwargs.get("momentum", 0.9) # Momentum used to train model
+        weight_decay = kwargs.get("weight_decay", 5e-4) # Weight decay used to train model
 
         if is_train is None:
-            raise ValueError("ProperTheoryRef requires is_train to be specified (to compute L0 properly)")
+            raise ValueError(f"{self.name} requires is_train to be specified (to compute L0 properly)")
         if learning_rate is None:
-            raise ValueError("ProperTheoryRef requires knowledge of learning_rate")
+            raise ValueError(f"{self.name} requires knowledge of learning_rate")
         if num_samples is None:
-            raise ValueError("ProperTheoryRef requires knowledge of num_samples")
+            raise ValueError(f"{self.name} requires knowledge of num_samples")
 
         # Factor out S/(2L*) parts out of both terms as common
         grad, ret_loss = self.get_specific_grad(x, y)
@@ -201,6 +202,9 @@ class ProperTheoryRef(Attack):
                 ihvp_alldata = (num_samples * self.l1_ihvp - datapoint_ihvp) / (num_samples - 1)
             else:
                 ihvp_alldata   = self.ihvp_module.inverse_hvp(all_other_data_grad)
+
+            if weight_decay > 0:
+                extra_ihvp = self.ihvp_module.inverse_hvp(datapoint_ihvp)
         else:
             # H-1 * grad(l(z))
             datapoint_ihvp = (self.H_inverse @ grad.cpu()).to(self.device)
@@ -209,15 +213,20 @@ class ProperTheoryRef(Attack):
                 ihvp_alldata = (num_samples * self.l1_ihvp - datapoint_ihvp) / (num_samples - 1)
             else:
                 ihvp_alldata   = (self.H_inverse @ all_other_data_grad.cpu()).to(self.device)
+            if weight_decay > 0:
+                extra_ihvp = (self.H_inverse @ datapoint_ihvp.cpu()).to(self.device)
 
         I2 = ch.dot(datapoint_ihvp, datapoint_ihvp).cpu().item() / num_samples
         I3 = ch.dot(ihvp_alldata, datapoint_ihvp).cpu().item() * 2
 
-        I2 /= learning_rate
-        I3 /= learning_rate
+        extra_reg_term = 0
+        if weight_decay > 0:
+            I4 = ch.dot(datapoint_ihvp, extra_ihvp).cpu().item() / num_samples
+            I5 = ch.dot(ihvp_alldata, extra_ihvp).cpu().item() * 2
+            extra_reg_term = - (I4 + I5) * weight_decay / learning_rate
 
-        mi_score = I1 - (I2 + I3)
-        # return -I3
+        scaling = (1 - ((learning_rate * weight_decay) / (1 + momentum))) / learning_rate
+        mi_score = I1 - ((I2 + I3) * scaling) + extra_reg_term
         return mi_score
 
 

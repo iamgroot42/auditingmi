@@ -314,8 +314,10 @@ def main(save_dir: str, args):
 
         # Compile model (Faster training)
         # model = ch.compile(model)
+
         # Utilize DDP
-        model = ch.nn.parallel.DataParallel(model)
+        if args.ddp:
+            model = ch.nn.parallel.DataParallel(model)
 
         # Get data
         if replica is None:
@@ -355,10 +357,12 @@ def main(save_dir: str, args):
         os.makedirs(save_dir_use, exist_ok=True)
 
         def get_save_dict(z):
-            # z is a DP wrapped (on top of compile-wrapped) dict
-            # we want state_dict of the original model
-            # return z._orig_mod.state_dict()
-            return z.module.state_dict()
+            if args.ddp:
+                # z is a DP wrapped (on top of compile-wrapped) dict
+                # we want state_dict of the original model
+                # return z._orig_mod.state_dict()
+                return z.module.state_dict()
+            return z.state_dict()
 
         if args.pick_n == 1:
             # Save model dictionary, along with information about train_index and test_index
@@ -397,11 +401,12 @@ if __name__ == "__main__":
     args = argparse.ArgumentParser()
     args.add_argument("--model_arch", type=str, default="wide_resnet_28_2")
     args.add_argument("--dataset", type=str, default="cifar10")
+    args.add_argument("--ddp", action="store_true", help="Use DDP for training")
     args.add_argument("--data_seed", type=int, default=2024)
     args.add_argument("--num_models", type=int, default=128, help="Total number of models (data splits will be created accordingly)")
     args.add_argument("--num_train", type=int, default=128, help="Number of models to train (out of num_models)")
     args.add_argument("--pick_n", type=int, default=1, help="Of all checkpoints, keep n.")
-    args.add_argument("--pick_mode", type=str, default="last", help="Criteria for picking N checkpoints.")
+    args.add_argument("--pick_mode", type=str, default="last_n", help="Criteria for picking N checkpoints.")
     args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
     args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")
     args.add_argument(
@@ -434,8 +439,8 @@ if __name__ == "__main__":
         raise ValueError("num_train cannot be greater than num_models")
     if args.pick_n < 1:
         raise ValueError("pick_n must be >= 1")
-    if args.pick_mode not in ["best", "last"]:
-        raise ValueError("pick_mode must be 'best' or 'last'")
+    if args.pick_mode not in ["best", "last", "last_n"]:
+        raise ValueError("pick_mode must be 'best', 'last_n', or 'last'")
     if (args.l_mode_ref_model == None) != (args.l_mode_ref_point == None):
         raise ValueError("l_mode_ref_model and l_mode_ref_point must be used together.")
 

@@ -2,6 +2,7 @@ from mib.models.wide_resnet import Wide_ResNet
 from mib.models.nasnet import NasNetA
 from mib.models.shufflenetv2 import ShuffleNetV2
 from mib.models.mlp import MLP, MLPQuadLoss
+from mib.models.cnn import CNN
 from torch import nn
 
 
@@ -45,9 +46,18 @@ MODEL_MAPPING = {
             ),
         ),
         "criterion": nn.CrossEntropyLoss(),
-        # "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 100},
-        # "hparams": {"batch_size": 256, "learning_rate": 0.05, "epochs": 100},
-        "hparams": {"batch_size": 256, "learning_rate": 0.05, "epochs": 120},
+        "hparams": {"batch_size": 256, "learning_rate": 0.05, "epochs": 500},
+    },
+    "mlp4_p100s": {
+        "model": (
+            MLP,
+            (
+                600,
+                [512, 256, 128, 64],
+            ),
+        ),
+        "criterion": nn.CrossEntropyLoss(),
+        "hparams": {"batch_size": 256, "learning_rate": 0.01, "epochs": 200},
     },
     "mlp3": {
         "model": (
@@ -134,7 +144,18 @@ MODEL_MAPPING = {
     "lr_mse": {
         "model": (MLPQuadLoss, (784, [])),
         "criterion": nn.MSELoss(),
-        "hparams": {"batch_size": 128, "learning_rate": 0.01, "epochs": 100},
+        "hparams": {"batch_size": 128, "learning_rate": 0.01, "epochs": 80},
+    },
+    "cnn32_3_avg": {
+        "model": (CNN, (3, 32, "avg", 3)),
+        "criterion": nn.CrossEntropyLoss(),
+        # LR 0.1 - too much fluctuatuion, around 84% test acc
+        "hparams": {"batch_size": 256, "learning_rate": 0.01, "epochs": 500},
+    },
+    "cnn64_3_avg": {
+        "model": (CNN, (3, 64, "avg", 3)),
+        "criterion": nn.CrossEntropyLoss(),
+        "hparams": {"batch_size": 256, "learning_rate": 0.01, "epochs": 500},
     },
     # "mlp4_slow": {
     #     "model": (MLP, ([512, 256, 128, 64], )),

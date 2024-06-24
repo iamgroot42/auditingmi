@@ -31,20 +31,20 @@ ATTACKS_TO_PLOT = [
     # "LiRAOnline_aug_last5",
     # "Activations",
     # "ActivationsOffline",
-    # "ProperTheoryRef",
+    # "IHA",
     "SIF_damping_0.2_lowrank_False",
     "Reference",
-    "ProperTheoryRef_damping_0.2_lowrank_False",
-    "ProperTheoryRef_approx_ihvp",
+    "IHA_damping_0.2_lowrank_False",
+    "IHA_approx_ihvp_0.2",
 ]
 ATTACK_MAPPING = {
     "LOSS": "LOSS",
     "Reference": "Reference",
-    "ProperTheoryRef": "IHA (Ours)",
-    "ProperTheoryRef_damping_0.2_lowrank_False": "IHA (Ours)",
+    "IHA": "IHA (Ours)",
+    "IHA_damping_0.2_lowrank_False": "IHA (Ours)",
     "LiRAOnline": "LiRA",
     "SIF_damping_0.2_lowrank_False": "SIF",
-    "ProperTheoryRef_approx_ihvp": "IHA (Ours)",
+    "IHA_approx_ihvp_0.2": "IHA (Ours)",
 }
 COLOR_MAPPING = {
     "IHA (Ours)": 0,
@@ -57,17 +57,17 @@ COLOR_MAPPING = {
 
 def main(args):
     # signals_path = os.path.join(get_signals_path(), "unhinged_audit", str(args.model_index))
-    signals_path = os.path.join(get_signals_path(), args.dataset, args.model_arch)
+    signals_path = os.path.join(get_signals_path(), args.dataset, f"{args.model_arch}_lr_{args.momentum}_wd_{args.weight_decay}")
 
     info = defaultdict(list)
     for model_index in os.listdir(signals_path):
-        inside_model_index = os.path.join(signals_path, model_index, f"lr_{args.momentum}_wd_{args.weight_decay}")
+        inside_model_index = os.path.join(signals_path, model_index)
 
         for attack in os.listdir(inside_model_index):
             # Remove ".ch" from end
             attack_name = attack[:-4]
             """
-            if int(model_index) in [3, 4, 5, 6, 8] and "ProperTheoryRef" in attack_name:
+            if int(model_index) in [3, 4, 5, 6, 8] and "IHA" in attack_name:
                 print("SKIPPED ONE!")
                 continue
             """
