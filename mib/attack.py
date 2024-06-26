@@ -232,8 +232,7 @@ def get_signals(return_dict,
             learning_rate=learning_rate,
             num_samples=num_samples,
             is_train=is_train,
-            momentum=args.momentum,
-            weight_decay=args.weight_decay
+            momentum=args.momentum
         )
         signals.append(score)
     prefix = "member" if is_train else "nonmember"
@@ -290,7 +289,8 @@ def main(args):
         f"{args.model_arch}_lr_{args.momentum}_wd_{args.weight_decay}",
         str(args.target_model_index),
     )
-    if os.path.exists(os.path.join(hessian_store_path, "hessian.ch")):
+    # Load Hessian if exists (unless approximate iHVP is used)
+    if os.path.exists(os.path.join(hessian_store_path, "hessian.ch")) and not args.approximate_ihvp:
         hessian = ch.load(os.path.join(hessian_store_path, "hessian.ch"))
         print("Loaded Hessian!")
 
@@ -312,6 +312,7 @@ def main(args):
             save_compute_trick=args.save_compute_trick,
             approximate=args.approximate_ihvp,
             tol=args.cg_tol,
+            weight_decay=args.weight_decay,
             device=f"cuda:{gpu_assignments[i]}",
         )
         attackers_mem.append(attacker_mem)
@@ -327,6 +328,7 @@ def main(args):
             approximate=args.approximate_ihvp,
             save_compute_trick=args.save_compute_trick,
             tol=args.cg_tol,
+            weight_decay=args.weight_decay,
             device=f"cuda:{gpu_assignments[i + args.num_parallel_each_loader]}",
         )
         attackers_nonmem.append(attacker_nonmem)

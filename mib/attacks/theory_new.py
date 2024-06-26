@@ -13,8 +13,9 @@ from torch_influence import AutogradInfluenceModule, LiSSAInfluenceModule, HVPMo
 
 
 class MyObjective(BaseObjective):
-    def __init__(self, criterion):
+    def __init__(self, criterion, weight_decay: float = 0):
         self._criterion = criterion
+        self._weight_decay = weight_decay
 
     def train_outputs(self, model, batch):
         return model(batch[0])
@@ -28,7 +29,9 @@ class MyObjective(BaseObjective):
             return self._criterion(outputs, batch[1])  # mean reduction required
 
     def train_regularization(self, params):
-        return 0
+        return 0.5 * self._weight_decay * sum(
+            ch.sum(ch.pow(p, 2)) for p in params
+        )
 
     def test_loss(self, model, params, batch):
         output = model(batch[0])
@@ -49,8 +52,9 @@ class IHA(Attack):
         hessian = kwargs.get("hessian", None) # Precomputed Hessian, if available
         damping_eps = kwargs.get("damping_eps", 2e-1) # Damping (or cutoff for low-rank approximation)
         low_rank = kwargs.get("low_rank", False) # Use low-rank approximation for Hessian?
-        save_compute_trick = kwargs.get("save_compute_trick", False) # Use L1 = L0 + 1/n l(z) trick to reduce iHVP calls per point from 2 to 1
         tol = kwargs.get("tol", 1e-5) # Tolerance for CG solver (if approximate is True)
+
+        self.weight_decay = kwargs.get("weight_decay", 5e-4) # Weight decay used to train model
 
         if all_train_loader is None:
             raise ValueError("IHA requires all_train_loader to be specified")
@@ -89,7 +93,7 @@ class IHA(Attack):
             """
             self.ihvp_module = CGInfluenceModule(
                 model=model,
-                objective=MyObjective(criterion),
+                objective=MyObjective(criterion, self.weight_decay),
                 train_loader=all_train_loader,
                 test_loader=None,
                 device=self.device,
@@ -115,15 +119,6 @@ class IHA(Attack):
                 # Damping
                 L += damping_eps
                 self.H_inverse = Q @ ch.diag(1 / L) @ Q.T
-
-        self.l1_ihvp = None
-        if save_compute_trick:
-            # n * L1 = (n-1) * L0 + l(z)
-            # L0 = (n * L1 - l(z) / (n-1)
-            if self.approximate:
-                self.l1_ihvp = self.ihvp_module.inverse_hvp(self.all_data_grad)
-            else:
-                self.l1_ihvp = (self.H_inverse @ self.all_data_grad.cpu()).to(self.device)
 
     def collect_grad_on_all_data(self, loader):
         cumulative_gradients = None
@@ -173,7 +168,6 @@ class IHA(Attack):
         num_samples = kwargs.get("num_samples", None)
         is_train = kwargs.get("is_train", None) 
         momentum = kwargs.get("momentum", 0.9) # Momentum used to train model
-        weight_decay = kwargs.get("weight_decay", 5e-4) # Weight decay used to train model
 
         if is_train is None:
             raise ValueError(f"{self.name} requires is_train to be specified (to compute L0 properly)")
@@ -198,68 +192,33 @@ class IHA(Attack):
             # H-1 * grad(l(z))
             datapoint_ihvp = self.ihvp_module.inverse_hvp(grad)
             # H-1 * grad(L0(z))
-            if self.l1_ihvp is not None:
-                ihvp_alldata = (num_samples * self.l1_ihvp - datapoint_ihvp) / (num_samples - 1)
-            else:
-                ihvp_alldata   = self.ihvp_module.inverse_hvp(all_other_data_grad)
+            ihvp_alldata   = self.ihvp_module.inverse_hvp(all_other_data_grad)
 
-            if weight_decay > 0:
+            if self.weight_decay > 0:
                 extra_ihvp = self.ihvp_module.inverse_hvp(datapoint_ihvp)
         else:
             # H-1 * grad(l(z))
             datapoint_ihvp = (self.H_inverse @ grad.cpu()).to(self.device)
             # H-1 * grad(L0(z))
-            if self.l1_ihvp is not None:
-                ihvp_alldata = (num_samples * self.l1_ihvp - datapoint_ihvp) / (num_samples - 1)
-            else:
-                ihvp_alldata   = (self.H_inverse @ all_other_data_grad.cpu()).to(self.device)
-            if weight_decay > 0:
+            ihvp_alldata   = (self.H_inverse @ all_other_data_grad.cpu()).to(self.device)
+            if self.weight_decay > 0:
                 extra_ihvp = (self.H_inverse @ datapoint_ihvp.cpu()).to(self.device)
 
         I2 = ch.dot(datapoint_ihvp, datapoint_ihvp).cpu().item() / num_samples
         I3 = ch.dot(ihvp_alldata, datapoint_ihvp).cpu().item() * 2
 
         extra_reg_term = 0
-        if weight_decay > 0:
+        if self.weight_decay > 0:
             I4 = ch.dot(datapoint_ihvp, extra_ihvp).cpu().item() / num_samples
             I5 = ch.dot(ihvp_alldata, extra_ihvp).cpu().item() * 2
-            extra_reg_term = - (I4 + I5) * weight_decay / learning_rate
+            extra_reg_term = - (I4 + I5) * self.weight_decay / learning_rate
 
-        scaling = (1 - ((learning_rate * weight_decay) / (1 + momentum))) / learning_rate
+        if self.weight_decay > 0:
+            scaling = (1 - ((learning_rate * self.weight_decay) / (1 + momentum))) / learning_rate
+        else:
+            scaling = 1 / learning_rate
         mi_score = I1 - ((I2 + I3) * scaling) + extra_reg_term
         return mi_score
-
-
-def fast_ihvp(model, vec, loader, criterion, device: str = "cpu"):
-    """
-        Use LiSSA to compute HVP for a given model and dataloader
-    """
-    module = LiSSAInfluenceModule(
-        model=model,
-        objective=MyObjective(criterion),
-        train_loader=loader,
-        test_loader=None,
-        device=device,
-        damp=0,
-        repeat=20,
-        depth=100,  # 5000 for MLP and Transformer, 10000 for CNN
-        scale=50,  # test in {10, 25, 50, 100, 150, 200, 250, 300, 400, 500} for convergence
-    )
-
-    # Get projection of vec onto inverse-Hessian
-    ihvp = module.inverse_hvp(vec)
-
-    """
-    hvp_module = HVPModule(model, MyObjective(criterion), loader, device=self.device)
-    ihvp = hso_ihvp(
-        vec,
-        hvp_module,
-        acceleration_order=10,
-        num_update_steps=30,
-    )
-    """
-
-    return ihvp
 
 
 def compute_hessian(model, loader, criterion, device: str = "cpu"):
@@ -398,10 +357,6 @@ if __name__ == "__main__":
         flat_grad.append(p.grad.detach().view(-1))
     flat_grad = ch.cat(flat_grad)
     m.zero_grad()
-
-    # Get HVP with LiSSA
-    hvp = fast_ihvp(m, flat_grad, loader, criterion, device=device)
-    print(hvp)
 
     # Get exact Hessian
     H = compute_hessian(m, loader, criterion, device=device)

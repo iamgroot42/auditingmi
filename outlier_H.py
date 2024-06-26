@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from mib.models.utils import get_model
 from mib.dataset.utils import get_dataset
-from mib.utils import get_models_path, DillProcess
+from mib.utils import get_models_path
 from mib.train import get_loader, train_model
 from mib.attacks.theory_new import compute_hessian
 
@@ -31,8 +31,6 @@ def train_models_multiple(
     """
         Train model on specified data multiple times, save Hessian for each case
     """
-    import numpy as np
-
     # Make loaders
     train_loader = get_loader(train_data, train_index, batch_size)
     test_loader  = get_loader(test_data, test_index, batch_size)
@@ -45,7 +43,6 @@ def train_models_multiple(
         model.to(device)
 
         # Train model
-        """
         model = train_model(
             model,
             criterion,
@@ -55,13 +52,10 @@ def train_models_multiple(
             hparams["epochs"],
             device=device,
         )[0]
-        """
 
         # Compute Hessian for this model
         exact_H = compute_hessian(model, train_loader, criterion, device=device)
         hessian = exact_H.cpu().clone().detach().numpy()
-        print(hessian)
-        exit(0)
         hessians.append(hessian)
 
     # Save hessians
@@ -121,9 +115,6 @@ def main(args):
         np.random.seed(args.exp_seed + 100 + i)
         D_indices_samples.append(np.random.choice(indices_sample_from, len(train_index), replace=False))
 
-    # In first wave, train models on clean data in parallel
-    num_gpus = ch.cuda.device_count()
-
     # Make sure relevant directories exist
     hessians_save_path = f"./ihp_study/hessians/{args.dataset}_{args.model_arch}_{args.target_model_index}/"
     for make_sure_exist in ["clean", "low_diff", "high_diff", "everything_else"]:
@@ -131,15 +122,11 @@ def main(args):
 
     # Train clean models in parallel
     # Hessian computation can get expensive, so only one to run one process per GPU
-    processes = []
-    for i, D_sample in enumerate(D_indices_samples):
+    for i, D_sample in tqdm(enumerate(D_indices_samples), desc="Clean models"):
         filename = os.path.join(hessians_save_path, "clean", f"{i}.npy")
 
         # Train on D_sample
-        p = DillProcess(
-            target=train_models_multiple,
-            args=(
-                args,
+        train_models_multiple(args,
                 D_sample,
                 train_data,
                 copy.deepcopy(model_init),
@@ -147,20 +134,9 @@ def main(args):
                 test_data,
                 ds,
                 batch_size,
-                f"cuda:{i % num_gpus}",
+                "cuda",
                 filename
-            ),
         )
-        p.start()
-        processes.append(p)
-
-        # Make sure we don't run more than num_gpus processes at a time
-        # which, given the tiling, means restricting one job per machine
-        if len(processes) >= num_gpus:
-            for p in processes:
-                p.join()
-            processes = []
-    exit(0)
 
     # For each clean model
     # For this, we assume at least 3 GPUs
@@ -171,17 +147,11 @@ def main(args):
         os.makedirs(os.path.join(hessians_save_path, "high_diff", f"{j}"), exist_ok=True)
         os.makedirs(os.path.join(hessians_save_path, "everything_else", f"{j}"), exist_ok=True)
 
-        processes = []
         # Now also run processes for low_diff, high_diff, and everything_else
         # One point at a time from all three
-        for i in range(args.n_sample):
-            processes = []
-
+        for i in tqdm(range(args.n_sample), "Outliers"):
             # Low-diff outlier
-            p = DillProcess(
-                target=train_models_multiple,
-                args=(
-                    args,
+            train_models_multiple(args,
                     np.concatenate([D_sample, [low_diff[i]]]),
                     train_data,
                     copy.deepcopy(model_init),
@@ -189,18 +159,12 @@ def main(args):
                     test_data,
                     ds,
                     batch_size,
-                    f"cuda:0",
+                    "cuda",
                     os.path.join(hessians_save_path, "low_diff", f"{j}", f"{i}.npy")
-                ),
             )
-            p.start()
-            processes.append(p)
 
             # High-diff outlier
-            p = DillProcess(
-                target=train_models_multiple,
-                args=(
-                    args,
+            train_models_multiple(args,
                     np.concatenate([D_sample, [high_diff[i]]]),
                     train_data,
                     copy.deepcopy(model_init),
@@ -208,18 +172,12 @@ def main(args):
                     test_data,
                     ds,
                     batch_size,
-                    f"cuda:1",
+                    "cuda",
                     os.path.join(hessians_save_path, "high_diff", f"{j}", f"{i}.npy")
-                ),
             )
-            p.start()
-            processes.append(p)
 
             # Everything else
-            p = DillProcess(
-                target=train_models_multiple,
-                args=(
-                    args,
+            train_models_multiple(args,
                     np.concatenate([D_sample, [everything_else[i]]]),
                     train_data,
                     copy.deepcopy(model_init),
@@ -227,16 +185,9 @@ def main(args):
                     test_data,
                     ds,
                     batch_size,
-                    f"cuda:2",
+                    "cuda",
                     os.path.join(hessians_save_path, "everything_else", f"{j}", f"{i}.npy")
-                ),
             )
-            p.start()
-            processes.append(p)
-
-            # Join them all
-            for p in processes:
-                p.join()
 
 
 if __name__ == "__main__":

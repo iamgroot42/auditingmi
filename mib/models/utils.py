@@ -8,11 +8,17 @@ from torch import nn
 
 MODEL_MAPPING = {
     "wide_resnet_28_1": {
+        # 4.8s/it
+        # 100e - 88%, 0.45
+        # 200e - 90%, 0.38
+        # 500e - 90%, ~0.35
         "model": (Wide_ResNet, (28, 1)),
         "criterion": nn.CrossEntropyLoss(),
-        "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 100},
+        "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 500},
     },
     "wide_resnet_28_2": {
+        # 500e - 92%
+        # 7s/it
         "model": (Wide_ResNet, (28, 2)),
         "criterion": nn.CrossEntropyLoss(),
         "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 100},
@@ -46,7 +52,14 @@ MODEL_MAPPING = {
             ),
         ),
         "criterion": nn.CrossEntropyLoss(),
-        "hparams": {"batch_size": 256, "learning_rate": 0.05, "epochs": 500},
+        # 100e -0.54, 82%
+        # 200e- 0.52, 82%
+        # 500e, 0.1 LR _ 0.44, 84%
+        # 400e, 0.1 LR - 0.44, ~84%
+        # 300e, 0.1 LR - 0.45, ~83%
+        # 200e, 0.1 LR - 0.47, 83%
+        # 100e, 0.1 LR -  0.49, 83%
+        "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 400},
     },
     "mlp4_p100s": {
         "model": (
@@ -54,7 +67,7 @@ MODEL_MAPPING = {
             (
                 600,
                 [512, 256, 128, 64],
-            ),
+            ),  
         ),
         "criterion": nn.CrossEntropyLoss(),
         "hparams": {"batch_size": 256, "learning_rate": 0.01, "epochs": 200},
@@ -146,16 +159,37 @@ MODEL_MAPPING = {
         "criterion": nn.MSELoss(),
         "hparams": {"batch_size": 128, "learning_rate": 0.01, "epochs": 80},
     },
+    "cnn32_3_max": {
+        # 4.7s/it
+        "model": (CNN, (3, 32, "max", 3)),
+        "criterion": nn.CrossEntropyLoss(),
+        # 500e - 
+        # 200e - 
+        # 100e - 
+        "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 100},
+    },
     "cnn32_3_avg": {
         "model": (CNN, (3, 32, "avg", 3)),
         "criterion": nn.CrossEntropyLoss(),
-        # LR 0.1 - too much fluctuatuion, around 84% test acc
-        "hparams": {"batch_size": 256, "learning_rate": 0.01, "epochs": 500},
+        # 200e - 87%, 0.67
+        # 100e - 86%, 0.76
+        "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 100},
+    },
+    "cnn64_3_max": {
+        "model": (CNN, (3, 64, "max", 3)),
+        "criterion": nn.CrossEntropyLoss(),
+        # 5s/it
+        # 500e -
+        # 200e - 89%, 0.53
+        # 100e - 88%, 0.59
+        "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 500},
     },
     "cnn64_3_avg": {
         "model": (CNN, (3, 64, "avg", 3)),
         "criterion": nn.CrossEntropyLoss(),
-        "hparams": {"batch_size": 256, "learning_rate": 0.01, "epochs": 500},
+        # 200e - 87%, 0.63
+        # 100e - 87%, 0.73
+        "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 100},
     },
     # "mlp4_slow": {
     #     "model": (MLP, ([512, 256, 128, 64], )),
