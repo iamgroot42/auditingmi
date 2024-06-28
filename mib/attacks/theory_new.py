@@ -29,9 +29,9 @@ class MyObjective(BaseObjective):
             return self._criterion(outputs, batch[1])  # mean reduction required
 
     def train_regularization(self, params):
-        return 0.5 * self._weight_decay * sum(
-            ch.sum(ch.pow(p, 2)) for p in params
-        )
+        if self._weight_decay == 0:
+            return 0
+        return 0.5 * self._weight_decay * ch.square(params.norm())
 
     def test_loss(self, model, params, batch):
         output = model(batch[0])
@@ -54,6 +54,7 @@ class IHA(Attack):
         low_rank = kwargs.get("low_rank", False) # Use low-rank approximation for Hessian?
         tol = kwargs.get("tol", 1e-5) # Tolerance for CG solver (if approximate is True)
 
+        self.skip_reg_term = kwargs.get("skip_reg_term", False) # Skip the extra-computation regularization term?
         self.weight_decay = kwargs.get("weight_decay", 5e-4) # Weight decay used to train model
 
         if all_train_loader is None:
@@ -70,7 +71,7 @@ class IHA(Attack):
         )
 
         self.approximate = approximate
-        self.model.to(self.device)
+        self.model.to(self.device, non_blocking=True)
 
         self.all_data_grad = self.collect_grad_on_all_data(all_train_loader)
 
@@ -135,7 +136,8 @@ class IHA(Attack):
             loss.backward()
             flat_grad = []
             for p in self.model.parameters():
-                flat_grad.append(p.grad.detach().view(-1))
+                if p.grad is not None:
+                    flat_grad.append(p.grad.detach().view(-1))
             # Flatten out gradients
             flat_grad = ch.cat(flat_grad)
             # Accumulate in higher precision
@@ -194,21 +196,21 @@ class IHA(Attack):
             # H-1 * grad(L0(z))
             ihvp_alldata   = self.ihvp_module.inverse_hvp(all_other_data_grad)
 
-            if self.weight_decay > 0:
+            if self.weight_decay > 0 and not self.skip_reg_term:
                 extra_ihvp = self.ihvp_module.inverse_hvp(datapoint_ihvp)
         else:
             # H-1 * grad(l(z))
-            datapoint_ihvp = (self.H_inverse @ grad.cpu()).to(self.device)
+            datapoint_ihvp = (self.H_inverse @ grad.cpu()).to(self.device, non_blocking=True)
             # H-1 * grad(L0(z))
             ihvp_alldata   = (self.H_inverse @ all_other_data_grad.cpu()).to(self.device)
-            if self.weight_decay > 0:
-                extra_ihvp = (self.H_inverse @ datapoint_ihvp.cpu()).to(self.device)
+            if self.weight_decay > 0 and not self.skip_reg_term:
+                extra_ihvp = (self.H_inverse @ datapoint_ihvp.cpu()).to(self.device, non_blocking=True)
 
         I2 = ch.dot(datapoint_ihvp, datapoint_ihvp).cpu().item() / num_samples
         I3 = ch.dot(ihvp_alldata, datapoint_ihvp).cpu().item() * 2
 
         extra_reg_term = 0
-        if self.weight_decay > 0:
+        if self.weight_decay > 0 and not self.skip_reg_term:
             I4 = ch.dot(datapoint_ihvp, extra_ihvp).cpu().item() / num_samples
             I5 = ch.dot(ihvp_alldata, extra_ihvp).cpu().item() * 2
             extra_reg_term = - (I4 + I5) * self.weight_decay / learning_rate
@@ -354,7 +356,8 @@ if __name__ == "__main__":
     loss.backward()
     flat_grad = []
     for p in m.parameters():
-        flat_grad.append(p.grad.detach().view(-1))
+        if p.grad is not None:
+            flat_grad.append(p.grad.detach().view(-1))
     flat_grad = ch.cat(flat_grad)
     m.zero_grad()
 

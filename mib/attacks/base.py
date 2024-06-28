@@ -37,6 +37,9 @@ class Attack(object):
             raise ValueError("Hessian is not used by this attack")
         return self.hessian
 
+    def get_model_output(self, **kwargs):
+        return self.model(**kwargs)
+
     def compute_scores(self, x, y, **kwargs) -> np.ndarray:
         """
         Compute the score of the attack. Must be implemented by child class.

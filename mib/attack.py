@@ -26,7 +26,6 @@ ch.backends.cudnn.deterministic = True
 ch.backends.cudnn.benchmark = False
 """
 
-
 def member_nonmember_loaders(
     train_data,
     train_idx,
@@ -40,6 +39,7 @@ def member_nonmember_loaders(
     """
     num_points_sample = -1 means all points should be used, and # of non-members will be set to be = # of members
     """
+    
     other_indices_train = np.array(
         [i for i in range(len(train_data)) if i not in train_idx]
     )
@@ -265,6 +265,23 @@ def main(args):
 
     # Get data
     train_data = ds.get_train_data()
+
+    if args.partial_model is not None:
+        # Skip train_data with corresponding features
+        # using target_model(layer_readout=args.partial_model)
+        # do it in batches, of course
+        X_, Y_ = [], []
+        target_model.cuda()
+        with ch.no_grad():
+            loader = get_loader(train_data, None, 128, num_workers=0)
+            for (x, y) in tqdm(loader, desc=f"Collecting features from layer {args.partial_model}"):
+                features = target_model(x.cuda(), layer_readout=args.partial_model).cpu().detach()
+                X_.append(features)
+                Y_.append(y)
+        # Make a new dataset out of X_ and Y_
+        target_model.cpu()
+        train_data = ch.utils.data.TensorDataset(ch.cat(X_), ch.cat(Y_))
+
     # Get data split
     (
         member_loader,
@@ -298,14 +315,32 @@ def main(args):
     num_gpus = ch.cuda.device_count()
     gpu_assignments = np.tile(np.arange(num_gpus), args.num_parallel_each_loader * 2)
 
+    train_index_for_hessian_loader = train_index
+    if args.subsample_ihvp < 1:
+        np.random.seed(args.exp_seed + 5)
+        train_index_for_hessian_loader = np.random.choice(
+            train_index, int(len(train_index) * args.subsample_ihvp), replace=False
+        )
+
+    # Extract "later" part of model
+    if args.partial_model is not None:
+        model_for_ihvp = target_model.make_later_layer_model(args.partial_model + 1)
+        model_for_ihvp.eval()
+    else:
+        model_for_ihvp = target_model
+
     # For reference-based attacks, train out models
     attackers_mem, attackers_nonmem = [], []
     for i in range(args.num_parallel_each_loader):
         # Keep cycling across num-GPUs and assign each odd to mem...
         attacker_mem = get_attack(args.attack)(
-            copy.deepcopy(target_model),
+            copy.deepcopy(model_for_ihvp),
             criterion,
-            all_train_loader=get_loader(train_data, train_index, args.hessian_batch_size, num_workers=0),
+            all_train_loader=get_loader(
+                train_data,
+                train_index_for_hessian_loader,
+                args.hessian_batch_size,
+                num_workers=0),
             hessian=hessian,
             damping_eps=args.damping_eps,
             low_rank=args.low_rank,
@@ -313,15 +348,21 @@ def main(args):
             approximate=args.approximate_ihvp,
             tol=args.cg_tol,
             weight_decay=args.weight_decay,
+            skip_reg_term=args.skip_reg_term,
             device=f"cuda:{gpu_assignments[i]}",
         )
         attackers_mem.append(attacker_mem)
 
         # ...and each even to non-mem
         attacker_nonmem = get_attack(args.attack)(
-            copy.deepcopy(target_model),
+            copy.deepcopy(model_for_ihvp),
             criterion,
-            all_train_loader=get_loader(train_data, train_index, args.hessian_batch_size, num_workers=0),
+            all_train_loader=get_loader(
+                train_data,
+                train_index_for_hessian_loader,
+                args.hessian_batch_size,
+                num_workers=0,
+            ),
             hessian=hessian,
             damping_eps=args.damping_eps,
             low_rank=args.low_rank,
@@ -329,6 +370,7 @@ def main(args):
             save_compute_trick=args.save_compute_trick,
             tol=args.cg_tol,
             weight_decay=args.weight_decay,
+            skip_reg_term=args.skip_reg_term,
             device=f"cuda:{gpu_assignments[i + args.num_parallel_each_loader]}",
         )
         attackers_nonmem.append(attacker_nonmem)
@@ -647,11 +689,22 @@ if __name__ == "__main__":
     args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
     args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")
     args.add_argument("--damping_eps", type=float, default=2e-1, help="Damping for Hessian computation (only valid for some attacks)")
-    args.add_argument("--cg_tol", type=float, default=1e-5, help="Tol for iHVP in CG (when using Approx)")
+    args.add_argument("--subsample_ihvp", type=float, default=1.0, help="If < 1, use a fraction of actual train data to pass to Hessian")
+    args.add_argument(
+        "--cg_tol",
+        type=float,
+        default=1e-5,
+        help="Tol for iHVP in CG (when using Approx)",
+    )
     args.add_argument(
         "--approximate_ihvp",
         action="store_true",
         help="If true, use approximate iHV (using CG) instead of exact iHVP",
+    )
+    args.add_argument(
+        "--skip_reg_term",
+        action="store_true",
+        help="If true, skip terms I4/I5 in Hessian computation for regularization-baesd attacks",
     )
     args.add_argument(
         "--save_compute_trick",
@@ -662,6 +715,12 @@ if __name__ == "__main__":
         "--low_rank",
         action="store_true",
         help="If true, use low-rank approximation of Hessian. Else, use damping. Useful for inverse",
+    )
+    args.add_argument(
+        "--partial_model",
+        type=int,
+        default=None,
+        help="Part of model from this specified layer is treated as actual model. Helps in computation for Hessian-based attacks",
     )
     args.add_argument("--target_model_index", type=int, default=0, help="Index of target model")
     args.add_argument("--num_ref_models", type=int, default=None)

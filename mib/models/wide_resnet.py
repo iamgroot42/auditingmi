@@ -132,7 +132,10 @@ class Wide_ResNet(nn.Module):
         assert len(features) == len(bnorm_means) == len(bnorm_vars), "Mismatch in lengths of batchnorm-related statistics!"
         return out, (features, bnorm_means, bnorm_vars)
 
-    def forward(self, x, layer_readout: int = None, pre_bn_layers: bool = False, get_all: bool = False):
+    def forward(self, x,
+                layer_readout: int = None,
+                pre_bn_layers: bool = False,
+                get_all: bool = False):
         if pre_bn_layers:
             return self.forward_prebn_stats(x)
 

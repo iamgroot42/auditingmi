@@ -17,7 +17,10 @@ def get_loader(dataset, indices,
                start_seed: int = 42,
                shuffle: bool = True,
                num_workers: int = 2):
-    subset_ds = ch.utils.data.Subset(dataset, indices)
+    if indices is None:
+        subset_ds = dataset
+    else:
+        subset_ds = ch.utils.data.Subset(dataset, indices)
 
     def worker_init_fn(worker_id):
         np.random.seed(start_seed + worker_id)
@@ -298,7 +301,7 @@ def main(save_dir: str, args):
 
         # Get model
         model, criterion, hparams = get_model(args.model_arch, n_classes=ds.num_classes)
-        model.to(device)
+        model.to(device, non_blocking=True)
         batch_size = hparams["batch_size"]
         learning_rate = hparams["learning_rate"]
         epochs = hparams["epochs"]
