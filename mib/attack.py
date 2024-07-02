@@ -306,10 +306,11 @@ def main(args):
         f"{args.model_arch}_lr_{args.momentum}_wd_{args.weight_decay}",
         str(args.target_model_index),
     )
-    # Load Hessian if exists (unless approximate iHVP is used)
-    if os.path.exists(os.path.join(hessian_store_path, "hessian.ch")) and not args.approximate_ihvp:
-        hessian = ch.load(os.path.join(hessian_store_path, "hessian.ch"))
-        print("Loaded Hessian!")
+    # Load Hessian if exists and needed by attack(unless approximate iHVP is used)
+    if args.attack in ["SIF", "IHA"]:
+        if os.path.exists(os.path.join(hessian_store_path, "hessian.ch")) and not args.approximate_ihvp:
+            hessian = ch.load(os.path.join(hessian_store_path, "hessian.ch"))
+            print("Loaded Hessian!")
 
     # Repeat each entry in num_gpus by (num_parallel_each_loader * 2) times
     num_gpus = ch.cuda.device_count()
@@ -344,7 +345,6 @@ def main(args):
             hessian=hessian,
             damping_eps=args.damping_eps,
             low_rank=args.low_rank,
-            save_compute_trick=args.save_compute_trick,
             approximate=args.approximate_ihvp,
             tol=args.cg_tol,
             weight_decay=args.weight_decay,
@@ -367,7 +367,6 @@ def main(args):
             damping_eps=args.damping_eps,
             low_rank=args.low_rank,
             approximate=args.approximate_ihvp,
-            save_compute_trick=args.save_compute_trick,
             tol=args.cg_tol,
             weight_decay=args.weight_decay,
             skip_reg_term=args.skip_reg_term,
@@ -541,6 +540,13 @@ def main(args):
         signals_out.append(score)
     """
 
+    # Assert length of signals is same
+    if len(signals_in) != len(signals_out):
+        print(
+            f"Length of signals_in and signals_out don't match. Found {len(signals_in)} and {len(signals_out)} respectively."
+        )
+        exit(0)
+
     # Save signals
     signals_in  = np.array(signals_in).flatten()
     signals_out = np.array(signals_out).flatten()
@@ -567,7 +573,7 @@ def main(args):
     if attackers_mem[0].uses_hessian:
         attack_name += f"_damping_{args.damping_eps}_lowrank_{args.low_rank}"
     if args.approximate_ihvp:
-        attack_name += f"_approx_ihvp_{args.damping_eps}"
+        attack_name += f"_approx_ihvp_{args.damping_eps}_tol_{args.cg_tol}"
 
     if args.sif_proper_mode:
         attack_name += "_sif_proper_mode"
@@ -658,6 +664,8 @@ def main(args):
     fpr, tpr, _ = roc_curve(total_labels, total_preds)
     roc_auc = auc(fpr, tpr)
     print("\n\n\n\nAUC: %.3f" % roc_auc)
+    if args.skip_save:
+        exit(0)
 
     # Save results
     np.save(
@@ -707,11 +715,6 @@ if __name__ == "__main__":
         help="If true, skip terms I4/I5 in Hessian computation for regularization-baesd attacks",
     )
     args.add_argument(
-        "--save_compute_trick",
-        action="store_true",
-        help="If true, use trick to skip computing H-1\grad(L0) for each target record.",
-    )
-    args.add_argument(
         "--low_rank",
         action="store_true",
         help="If true, use low-rank approximation of Hessian. Else, use damping. Useful for inverse",
@@ -728,6 +731,11 @@ if __name__ == "__main__":
         "--simulate_metaclf",
         action="store_true",
         help="If true, use scores as features and fit LOO-style meta-classifier for each target datapoint",
+    )
+    args.add_argument(
+        "--skip_save",
+        action="store_true",
+        help="If true, so not save scores to file",
     )
     args.add_argument("--l_mode", action="store_true", help="L-mode (where out reference model is trained on all data except target record)")
     args.add_argument("--aug", action="store_true", help="Use augmented data?")

@@ -79,6 +79,10 @@ def main(args):
 
             signals_in = data["in"]
             signals_out = data["out"]
+
+            if abs(len(signals_in) - len(signals_out)) > 1:
+                raise ValueError(f"Mismatched signals for {attack_name}[{model_index}]: found {len(signals_in)} signals_in and {len(signals_out)} signals_out.")
+
             # Accidentally forgot negative sign for FLIP signals. Will fix later, but for now just flip the signals here
             if "SIF" in attack_name:
                 signals_in = -signals_in

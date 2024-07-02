@@ -94,7 +94,7 @@ class IHA(Attack):
             """
             self.ihvp_module = CGInfluenceModule(
                 model=model,
-                objective=MyObjective(criterion, self.weight_decay),
+                objective=MyObjective(criterion),
                 train_loader=all_train_loader,
                 test_loader=None,
                 device=self.device,
@@ -104,7 +104,14 @@ class IHA(Attack):
             # """
         else:
             if hessian is None:
-                exact_H = compute_hessian(model, all_train_loader, self.criterion, device=self.device)
+                exact_H = compute_hessian(
+                    model,
+                    all_train_loader,
+                    self.criterion,
+                    weight_decay=self.weight_decay,
+                    device=self.device,
+                    verbose=True,
+                )
                 self.hessian = exact_H.cpu().clone().detach()
             else:
                 self.hessian = hessian
@@ -223,7 +230,10 @@ class IHA(Attack):
         return mi_score
 
 
-def compute_hessian(model, loader, criterion, device: str = "cpu"):
+def compute_hessian(
+    model, loader, criterion, weight_decay,
+    device: str = "cpu", verbose: bool = False
+):
     """
     Compute Hessian at given point
     """
@@ -237,6 +247,7 @@ def compute_hessian(model, loader, criterion, device: str = "cpu"):
         device=device,
         damp=0,
         store_as_hessian=True,
+        verbose=verbose,
     )
 
     H = module.get_hessian()
@@ -362,5 +373,5 @@ if __name__ == "__main__":
     m.zero_grad()
 
     # Get exact Hessian
-    H = compute_hessian(m, loader, criterion, device=device)
+    H = compute_hessian(m, loader, criterion, weight_decay=0, device=device)
     print(H)

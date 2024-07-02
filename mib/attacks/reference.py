@@ -12,14 +12,17 @@ class Reference(Attack):
     """
     Reference-based attack
     """
-    def __init__(self, model, criterion, **kwargs):
-        super().__init__("Reference", model, criterion, reference_based=True)
+    def __init__(self, model, criterion, device: str = "cuda", **kwargs):
+        super().__init__(
+            "Reference", model, criterion, device=device, reference_based=True
+        )
+        self.model.to(self.device)
 
     def compute_scores(self, x, y, **kwargs) -> np.ndarray:
         out_models = kwargs.get("out_models", None)
         if out_models is None:
             raise ValueError("Reference attack requires out_models to be specified")
-        return compute_ref_score(self.model, x, y, out_models, self.criterion)
+        return compute_ref_score(self.model, x, y, self.device, out_models, self.criterion)
 
 
 class ReferenceSmooth(Attack):
@@ -52,23 +55,21 @@ class ReferenceAlex(Attack):
 
 
 @ch.no_grad()
-def compute_ref_score(model, x, y, out_models, criterion, proper_ref_aggregate: bool = False):
-    x, y = x.cuda(), y.cuda()
-    model.cuda()
-    logits = model(x.cuda()).detach()
+def compute_ref_score(model, x, y, device, out_models, criterion, proper_ref_aggregate: bool = False):
+    x, y = x.to(device), y.to(device)
+    logits = model(x).detach()
     if logits.shape[1] == 1:
         logits = logits.squeeze(1)
-    loss = criterion(logits, y.cuda()).cpu().numpy()
-    model.cpu()
+    loss = criterion(logits, y).cpu().numpy()
 
     ref_losses = []
     for out_model in out_models:
-        out_model.cuda()
-        logits = out_model(x.cuda()).detach()
+        out_model.to(device)
+        logits = out_model(x).detach()
         if logits.shape[1] == 1:
             logits = logits.squeeze(1)
         ref_loss = (
-            criterion(logits, y.cuda()).cpu().numpy()
+            criterion(logits, y).cpu().numpy()
         )
         out_model.cpu()
         ref_losses.append(ref_loss)

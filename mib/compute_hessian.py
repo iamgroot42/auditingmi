@@ -59,7 +59,7 @@ def main(args):
         target_model,
         criterion,
         all_train_loader=get_loader(
-            train_data, train_index, args.hessian_batch_size, num_workers=0
+            train_data, train_index, args.hessian_batch_size, num_workers=4
         ),
         hessian=hessian,
         damping_eps=2e-1,

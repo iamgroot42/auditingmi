@@ -33,7 +33,10 @@ class MLP(nn.Module):
         if add_sigmoid:
             self.layers.append(nn.Sigmoid())
         self.layers = nn.ModuleList(self.layers)
-    
+
+        # 600, relu, 512, relu, 256, relu, 128, relu, 64, relu, 100
+        # 0     1     2    3     4    5     6    7    8    9,    10
+
     def make_later_layer_model(self, layer_readout: int):
         # Split existing models into two at layer_readout, create a new model for the second part
         # with existing parameters and return that
