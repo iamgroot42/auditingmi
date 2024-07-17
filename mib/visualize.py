@@ -35,7 +35,11 @@ ATTACKS_TO_PLOT = [
     "SIF_damping_0.2_lowrank_False",
     "Reference",
     "IHA_damping_0.2_lowrank_False",
-    "IHA_approx_ihvp_0.2",
+    "IHA_approx_ihvp_0.2_tol_0.001",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.2",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.4",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.6",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.8",
 ]
 ATTACK_MAPPING = {
     "LOSS": "LOSS",
@@ -44,14 +48,19 @@ ATTACK_MAPPING = {
     "IHA_damping_0.2_lowrank_False": "IHA (Ours)",
     "LiRAOnline": "LiRA",
     "SIF_damping_0.2_lowrank_False": "SIF",
-    "IHA_approx_ihvp_0.2": "IHA (Ours)",
+    "IHA_approx_ihvp_0.2_tol_0.001": "IHA (CG)",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.2": "IHA (CG, 0.2)",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.4": "IHA (CG, 0.4)",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.6": "IHA (CG, 0.6)",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.8": "IHA (CG, 0.8)",
 }
 COLOR_MAPPING = {
     "IHA (Ours)": 0,
-    "LiRA": 1,
-    "Reference": 2,
+    "IHA (CG)": 1,
+    "LiRA": 2,
     "LOSS": 3,
-    "SIF": 4
+    "SIF": 4,
+    "RMIA": 5
 }
 
 
@@ -97,21 +106,21 @@ def main(args):
             tpr_at_low_fpr = lambda x: tpr[np.where(np.array(fpr) < x)[0][-1]]
             info_ = {
                 "roc_auc": roc_auc,
-                "tpr@0.1fpr": tpr_at_low_fpr(0.1),
-                "tpr@0.01fpr": tpr_at_low_fpr(0.01),
-                "tpr@0.001fpr": tpr_at_low_fpr(0.001),
+                # "tpr@0.1fpr": tpr_at_low_fpr(0.1),
+                "tpr%%@0.01fpr": tpr_at_low_fpr(0.01) * 100,
+                "tpr%%@0.001fpr": tpr_at_low_fpr(0.001) * 100,
+                "tpr%%@0.0001fpr": tpr_at_low_fpr(0.0001) * 100,
                 "fpr": fpr,
                 "tpr": tpr,
             }
             info[attack_name].append(info_)
 
-    """
-    # First, assert we have same # of models per attack
-    num_models = [len(info[attack_name]) for attack_name in info.keys()]
-    if len(set(num_models)) != 1:
-        raise ValueError("Different number of models per attack:", {k:len(v) for k,v in info.items()})
-    print("Number of models per attack:", num_models[0])
-    """
+    # Print out attacks that have < 10 models for results
+    for attack_name, info_ in info.items():
+        # if len(info_) < 10:
+        if len(info_) < 3:
+            print(f"Ignore {attack_name} since it has results only for {len(info_)} models")
+    print("\n\n")
 
     # Set colorblind-friendly colors
     CB_colors = [
@@ -144,19 +153,26 @@ def main(args):
     for attack_name, info_ in info.items():
         mean_auc = np.mean([i["roc_auc"] for i in info_])
         print(
-            "%s | AUC = %0.3f ±  %0.3f | TPR@0.1FPR=%0.3f ± %0.3f | TPR@0.01FPR=%0.3f ± %0.3f | TPR@0.001FPR=%0.3f ± %0.3f"
+            # "%s | AUC = %0.3f ±  %0.3f | TPR@0.1FPR=%0.3f ± %0.3f | TPR@0.01FPR=%0.3f ± %0.3f | TPR@0.001FPR=%0.3f ± %0.3f"
+            "%s | AUC = %0.3f ±  %0.3f | TPR%%@1%%FPR=%0.2f ± %0.2f | TPR%%@0.1%%FPR=%0.2f ± %0.2f | TPR%%@0.01%%FPR=%0.2f ± %0.2f"
             % (
                 attack_name,
                 mean_auc,
                 np.std([i["roc_auc"] for i in info_]),
-                np.mean([i["tpr@0.1fpr"] for i in info_]),
-                np.std([i["tpr@0.1fpr"] for i in info_]),
-                np.mean([i["tpr@0.01fpr"] for i in info_]),
-                np.std([i["tpr@0.01fpr"] for i in info_]),
-                np.mean([i["tpr@0.001fpr"] for i in info_]),
-                np.std([i["tpr@0.001fpr"] for i in info_]),
+                # np.mean([i["tpr@0.1fpr"] for i in info_]),
+                # np.std([i["tpr@0.1fpr"] for i in info_]),
+                np.mean([i["tpr%%@0.01fpr"] for i in info_]),
+                np.std([i["tpr%%@0.01fpr"] for i in info_]),
+                np.mean([i["tpr%%@0.001fpr"] for i in info_]),
+                np.std([i["tpr%%@0.001fpr"] for i in info_]),
+                np.mean([i["tpr%%@0.0001fpr"] for i in info_]),
+                np.std([i["tpr%%@0.0001fpr"] for i in info_]),
             )
         )
+        if ATTACK_MAPPING[attack_name] not in COLOR_MAPPING:
+            print(f"WARNING: {attack_name} not in COLOR_MAPPING. Skipping")
+            continue
+
         fprs = info_[args.which_plot]["fpr"]
         tprs = info_[args.which_plot]["tpr"]
         plt.plot(fprs, tprs, label=ATTACK_MAPPING[attack_name], c=CB_colors[COLOR_MAPPING[ATTACK_MAPPING[attack_name]]])

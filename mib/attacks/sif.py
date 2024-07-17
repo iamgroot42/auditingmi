@@ -13,7 +13,7 @@ from torch_influence import (
     LiSSAInfluenceModule,
     CGInfluenceModule,
 )
-from mib.attacks.theory_new import compute_hessian
+from mib.attacks.theory_new import compute_hessian, MyObjective
 
 
 class SIF(Attack):
@@ -21,12 +21,16 @@ class SIF(Attack):
     Direct computation of SIF (g H^{-1] g)
     """
 
-    def __init__(self, model, criterion, **kwargs):
+    def __init__(self, model, criterion, device: str = "cuda", **kwargs):
         all_train_loader = kwargs.get("all_train_loader", None)
         approximate = kwargs.get("approximate", False)
         hessian = kwargs.get("hessian", None)
         damping_eps = kwargs.get("damping_eps", 2e-1)
         low_rank = kwargs.get("low_rank", False)
+        tol = kwargs.get(
+            "tol", 1e-5
+        )  # Tolerance for CG solver (if approximate is True)
+        self.weight_decay = kwargs.get("weight_decay", 5e-4) # Weight decay used to train model
 
         if all_train_loader is None:
             raise ValueError(
@@ -36,68 +40,40 @@ class SIF(Attack):
             "SIF",
             model,
             criterion,
+            device=device,
             reference_based=False,
             requires_trace=False,
             whitebox=True,
-            uses_hessian = not approximate
+            uses_hessian=not approximate,
         )
 
         self.approximate = approximate
-        self.model.cuda()
+        self.model.to(self.device, non_blocking=True)
 
         self.all_data_grad = self.collect_grad_on_all_data(all_train_loader)
 
         # Exact Hessian
         if self.approximate:
 
-            class MyObjective(BaseObjective):
-                def train_outputs(self, model, batch):
-                    return model(batch[0])
-
-                def train_loss_on_outputs(self, outputs, batch):
-                    if outputs.shape[1] == 1:
-                        return criterion(
-                            outputs.squeeze(1), batch[1].float()
-                        )  # mean reduction required
-                    else:
-                        return criterion(outputs, batch[1])  # mean reduction required
-
-                def train_regularization(self, params):
-                    return 0
-
-                def test_loss(self, model, params, batch):
-                    output = model(batch[0])
-                    # no regularization in test loss
-                    if output.shape[1] == 1:
-                        return criterion(output.squeeze(1), batch[1].float())
-                    else:
-                        return criterion(output, batch[1])
-
-            """
-            self.ihvp_module = LiSSAInfluenceModule(
-                model=model,
-                objective=MyObjective(),
-                train_loader=all_train_loader,
-                test_loader=None,
-                device="cuda",
-                repeat=4,
-                depth=100,  # 5000 for MLP and Transformer, 10000 for CNN
-                scale=25,
-                damp=2e-1,
-            )
-            """
             self.ihvp_module = CGInfluenceModule(
                 model=model,
-                objective=MyObjective(),
+                objective=MyObjective(criterion),
                 train_loader=all_train_loader,
                 test_loader=None,
-                device="cuda",
-                damp=1e-2,
+                device=self.device,
+                damp=damping_eps,
+                tol=tol,
             )
-            # """
         else:
             if hessian is None:
-                exact_H = compute_hessian(model, all_train_loader, self.criterion, device="cuda")
+                exact_H = compute_hessian(
+                    model,
+                    all_train_loader,
+                    self.criterion,
+                    weight_decay=self.weight_decay,
+                    device=self.device,
+                    verbose=True,
+                )
                 self.hessian = exact_H.cpu().clone().detach()
             else:
                 self.hessian = hessian
@@ -120,7 +96,7 @@ class SIF(Attack):
             # Zero-out accumulation
             self.model.zero_grad()
             # Compute gradients
-            x, y = x.cuda(), y.cuda()
+            x, y = x.to(self.device), y.to(self.device)
             logits = self.model(x)
             if logits.shape[1] == 1:
                 loss = self.criterion(logits.squeeze(), y.float()) * len(x)
@@ -142,11 +118,11 @@ class SIF(Attack):
 
     def get_specific_grad(self, point_x, point_y):
         self.model.zero_grad()
-        logits = self.model(point_x.cuda())
+        logits = self.model(point_x.to(self.device))
         if logits.shape[1] == 1:
-            loss = self.criterion(logits.squeeze(1), point_y.float().cuda())
+            loss = self.criterion(logits.squeeze(1), point_y.float().to(self.device))
         else:
-            loss = self.criterion(logits, point_y.cuda())
+            loss = self.criterion(logits, point_y.to(self.device))
         ret_loss = loss.item()
         loss.backward()
         flat_grad = []
@@ -157,15 +133,14 @@ class SIF(Attack):
         return flat_grad, ret_loss
 
     def compute_scores(self, x, y, **kwargs) -> np.ndarray:
-        x, y = x.cuda(), y.cuda()
+        x, y = x.to(self.device), y.to(self.device)
 
-        # Factor out S/(2L*) parts out of both terms as common
         grad, ret_loss = self.get_specific_grad(x, y)
 
         if self.approximate:
             datapoint_ihvp = self.ihvp_module.inverse_hvp(grad)
         else:
-            datapoint_ihvp = (self.H_inverse @ grad.cpu()).cuda()
+            datapoint_ihvp = (self.H_inverse @ grad.cpu()).to(self.device)
 
         score = ch.dot(datapoint_ihvp, grad).cpu().item()
         return score

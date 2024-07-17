@@ -581,6 +581,9 @@ def main(args):
         suffix = f"_{args.suffix}"
     if args.simulate_metaclf:
         attack_name += "_metaclf"
+    
+    if args.subsample_ihvp < 1:
+        attack_name += f"_subsample_{args.subsample_ihvp}"
 
     if args.simulate_metaclf:
         # Use a 2-depth decision tree to fit a meta-classifier
