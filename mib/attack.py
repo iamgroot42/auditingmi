@@ -15,8 +15,10 @@ from mib.models.utils import get_model
 from sklearn.metrics import roc_curve, auc
 from mib.dataset.utils import get_dataset
 from mib.attacks.utils import get_attack
-from mib.utils import get_signals_path, get_models_path, get_misc_path, DillProcess
+from mib.utils import get_signals_path, get_models_path, get_misc_path, DillProcess, load_ref_models
 from mib.train import get_loader
+
+
 from sklearn.ensemble import RandomForestClassifier
 
 """
@@ -34,12 +36,13 @@ def member_nonmember_loaders(
     num_nontrain_pool: int = None,
     batch_size: int = 1,
     want_all_member_nonmember: bool = False,
-    split_each_loader: int = 1
+    split_each_loader: int = 1,
+    l_mode: bool = False,
 ):
     """
     num_points_sample = -1 means all points should be used, and # of non-members will be set to be = # of members
     """
-    
+
     other_indices_train = np.array(
         [i for i in range(len(train_data)) if i not in train_idx]
     )
@@ -51,6 +54,8 @@ def member_nonmember_loaders(
     # Create Subset datasets for members
     if want_all_member_nonmember:
         train_index_subset = train_idx
+    elif l_mode:
+        train_index_subset = train_idx[:num_points_sample]
     else:
         np.random.seed(exp_seed)
         train_index_subset = np.random.choice(train_idx, num_points_sample, replace=False)
@@ -95,6 +100,8 @@ def member_nonmember_loaders(
     if split_each_loader > 1:
         train_index_splits = np.array_split(train_index_subset, split_each_loader)
         nonmember_index_splits = np.array_split(nonmember_index_subset, split_each_loader)
+        if len(train_index_splits[0]) != len(nonmember_index_splits[0]):
+            raise ValueError("For some reason, members and non-members have unequal split?")
 
         train_index_subset_, nonmember_index_subset_ = [], []
         member_loader, nonmember_loader = [], []
@@ -115,7 +122,7 @@ def member_nonmember_loaders(
             )
             member_loader.append(member_loader_)
             nonmember_loader.append(nonmember_loader_)
-        
+
         # Replace back train_index_subset and nonmember_index_subset
         train_index_subset = train_index_subset_
         nonmember_index_subset = nonmember_index_subset_
@@ -141,39 +148,8 @@ def member_nonmember_loaders(
         nonmember_loader,
         nonmember_dset_ft,
         train_index_subset,
-        nonmember_index_subset,
+        nonmember_index_subset
     )
-
-
-def load_ref_models(model_dir, args, num_classes: int):
-    if args.same_seed_ref:
-        folder_to_look_in = os.path.join(model_dir, f"same_init/{args.target_model_index}")
-    else:
-        folder_to_look_in = model_dir
-
-    if args.specific_ref_folder is not None:
-        folder_to_look_in = os.path.join(folder_to_look_in, args.specific_ref_folder)
-
-    # Look specifically inside folder corresponding to this model's seed
-    ref_models, ref_indices = [], []
-    for m in os.listdir(folder_to_look_in):
-        # Skip if directory
-        if os.path.isdir(os.path.join(folder_to_look_in, m)):
-            continue
-
-        # Skip ref model if trained on exact same data split as target model
-        # if m.split(".pt")[0].split("_")[0] == f"{args.target_model_index}":
-        #    continue
-
-        model, _, _ = get_model(args.model_arch, num_classes)
-        state_dict = ch.load(os.path.join(folder_to_look_in, m))
-        ref_indices.append(state_dict["train_index"])
-        model.load_state_dict(state_dict["model"], strict=False)
-        model.eval()
-        ref_models.append(model)
-
-    ref_indices = np.array(ref_indices, dtype=object)
-    return ref_models, ref_indices
 
 
 def get_signals(return_dict,
@@ -186,10 +162,12 @@ def get_signals(return_dict,
                 model_map: np.ndarray,
                 learning_rate: float,
                 num_samples: int,
-                ref_models = None,):
+                ref_models = None):
     # Weird multiprocessing bug when using a dill wrapper, so need to re-import
     from tqdm import tqdm
     import numpy as np
+    import os
+    from mib.utils import load_ref_models
 
     # Compute signals for member data
     signals = []
@@ -204,18 +182,13 @@ def get_signals(return_dict,
             if args.num_ref_models is not None:
                 in_models_use = in_models_use[: args.num_ref_models]
 
-            # For L-mode, load out models specific to datapoint
-            if args.l_mode and is_train:
-                this_dir = os.path.join(model_dir, f"l_mode/{i}")
-                out_models_use, ref_indices = load_ref_models(this_dir, args)
-            else:
-                # Use existing ref models
-                out_models_use = [
-                    ref_models[j] for j in np.nonzero(1 - model_map[:, i])[0][:]
-                ]
-                if args.num_ref_models is not None:
-                    out_models_use = out_models_use[: args.num_ref_models]
-                    in_models_use = in_models_use[: args.num_ref_models]
+            # Use existing ref models
+            out_models_use = [
+                ref_models[j] for j in np.nonzero(1 - model_map[:, i])[0][:]
+            ]
+            if args.num_ref_models is not None:
+                out_models_use = out_models_use[: args.num_ref_models]
+                in_models_use = in_models_use[: args.num_ref_models]
 
         # Apply input augmentations
         x_aug = None
@@ -232,7 +205,11 @@ def get_signals(return_dict,
             learning_rate=learning_rate,
             num_samples=num_samples,
             is_train=is_train,
-            momentum=args.momentum
+            momentum=args.momentum,
+            skip_reg_term=args.skip_reg_term,
+            skip_loss=args.skip_loss,
+            only_i1=args.only_i1,
+            only_i2=args.only_i2,
         )
         signals.append(score)
     prefix = "member" if is_train else "nonmember"
@@ -288,14 +265,14 @@ def main(args):
         nonmember_loader,
         nonmember_dset_ft,
         train_index_subset,
-        nonmember_index_subset,
+        nonmember_index_subset
     ) = member_nonmember_loaders(
         train_data,
         train_index,
         args.num_points,
         args.exp_seed,
         num_nontrain_pool=num_nontrain_pool,
-        split_each_loader=args.num_parallel_each_loader,
+        split_each_loader=args.num_parallel_each_loader
     )
 
     hessian = None
@@ -348,7 +325,6 @@ def main(args):
             approximate=args.approximate_ihvp,
             tol=args.cg_tol,
             weight_decay=args.weight_decay,
-            skip_reg_term=args.skip_reg_term,
             device=f"cuda:{gpu_assignments[i]}",
         )
         attackers_mem.append(attacker_mem)
@@ -369,7 +345,6 @@ def main(args):
             approximate=args.approximate_ihvp,
             tol=args.cg_tol,
             weight_decay=args.weight_decay,
-            skip_reg_term=args.skip_reg_term,
             device=f"cuda:{gpu_assignments[i + args.num_parallel_each_loader]}",
         )
         attackers_nonmem.append(attacker_nonmem)
@@ -388,11 +363,11 @@ def main(args):
         nonmember_index_subset = [nonmember_index_subset]
 
     # Load up reference models
-    if attackers_mem[0].reference_based and not args.l_mode:
+    member_map = None
+    nonmember_map = None
+    if attackers_mem[0].reference_based:
         ref_models, ref_indices = load_ref_models(model_dir, args, ds.num_classes)
     else:
-        member_map = None
-        nonmember_map = None
         ref_models = None
 
     for i in range(args.num_parallel_each_loader):
@@ -581,9 +556,21 @@ def main(args):
         suffix = f"_{args.suffix}"
     if args.simulate_metaclf:
         attack_name += "_metaclf"
-    
+
     if args.subsample_ihvp < 1:
         attack_name += f"_subsample_{args.subsample_ihvp}"
+
+    if args.num_points != -1:
+        attack_name += f"_npoints_{args.num_points}"
+
+    if args.skip_reg_term:
+        attack_name += "_skip_reg_term"
+    if args.skip_loss:
+        attack_name += "_skip_loss"
+    if args.only_i1:
+        attack_name += "_only_i1"
+    if args.only_i2:
+        attack_name += "_only_i2"
 
     if args.simulate_metaclf:
         # Use a 2-depth decision tree to fit a meta-classifier
@@ -692,57 +679,18 @@ def main(args):
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
-    args.add_argument("--model_arch", type=str, default="wide_resnet_28_2")
-    args.add_argument("--dataset", type=str, default="cifar10")
-    args.add_argument("--attack", type=str, default="LOSS")
-    args.add_argument("--hessian_batch_size", type=int, default=256, help="Batch size for Hessian computation")
-    args.add_argument("--exp_seed", type=int, default=2024)
-    args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
-    args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")
-    args.add_argument("--damping_eps", type=float, default=2e-1, help="Damping for Hessian computation (only valid for some attacks)")
-    args.add_argument("--subsample_ihvp", type=float, default=1.0, help="If < 1, use a fraction of actual train data to pass to Hessian")
-    args.add_argument(
-        "--cg_tol",
-        type=float,
-        default=1e-5,
-        help="Tol for iHVP in CG (when using Approx)",
-    )
-    args.add_argument(
-        "--approximate_ihvp",
-        action="store_true",
-        help="If true, use approximate iHV (using CG) instead of exact iHVP",
-    )
-    args.add_argument(
-        "--skip_reg_term",
-        action="store_true",
-        help="If true, skip terms I4/I5 in Hessian computation for regularization-baesd attacks",
-    )
-    args.add_argument(
-        "--low_rank",
-        action="store_true",
-        help="If true, use low-rank approximation of Hessian. Else, use damping. Useful for inverse",
-    )
-    args.add_argument(
-        "--partial_model",
-        type=int,
-        default=None,
-        help="Part of model from this specified layer is treated as actual model. Helps in computation for Hessian-based attacks",
-    )
+    # Attack setup
     args.add_argument("--target_model_index", type=int, default=0, help="Index of target model")
     args.add_argument("--num_ref_models", type=int, default=None)
-    args.add_argument(
-        "--simulate_metaclf",
-        action="store_true",
-        help="If true, use scores as features and fit LOO-style meta-classifier for each target datapoint",
-    )
-    args.add_argument(
-        "--skip_save",
-        action="store_true",
-        help="If true, so not save scores to file",
-    )
-    args.add_argument("--l_mode", action="store_true", help="L-mode (where out reference model is trained on all data except target record)")
+    args.add_argument("--attack", type=str, default="LOSS")
+    args.add_argument("--exp_seed", type=int, default=2024)
     args.add_argument("--aug", action="store_true", help="Use augmented data?")
-    args.add_argument("--sif_proper_mode", action="store_true", help="Tune 2 thresholds for SIF like original paper")
+    args.add_argument(
+        "--num_parallel_each_loader",
+        type=int,
+        default=2,
+        help="Split each loader into this many parts. Use > 1 for more parallelism",
+    )
     args.add_argument(
         "--num_points",
         type=int,
@@ -766,13 +714,79 @@ if __name__ == "__main__":
         default=None,
         help="Custom suffix (folder) to load models from",
     )
+    # Dataset/model related
+    args.add_argument("--model_arch", type=str, default="wide_resnet_28_2")
+    args.add_argument("--dataset", type=str, default="cifar10")
+    args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
+    args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")
+    # Specific to IHA
+    args.add_argument("--damping_eps", type=float, default=2e-1, help="Damping for Hessian computation (only valid for some attacks)")
+    args.add_argument("--subsample_ihvp", type=float, default=1.0, help="If < 1, use a fraction of actual train data to pass to Hessian")
     args.add_argument(
-        "--num_parallel_each_loader",
+        "--hessian_batch_size",
         type=int,
-        default=2,
-        help="Split each loader into this many parts. Use > 1 for more parallelism",
+        default=256,
+        help="Batch size for Hessian computation",
     )
+    args.add_argument(
+        "--cg_tol",
+        type=float,
+        default=1e-3,
+        help="Tol for iHVP in CG (when using Approx)",
+    )
+    args.add_argument(
+        "--approximate_ihvp",
+        action="store_true",
+        help="If true, use approximate iHV (using CG) instead of exact iHVP",
+    )
+    args.add_argument(
+        "--skip_reg_term",
+        action="store_true",
+        help="If true, skip terms I3/I4 in IHA",
+    )
+    args.add_argument(
+        "--skip_loss",
+        action="store_true",
+        help="If true, skip loss term in IHA",
+    )
+    args.add_argument(
+        "--only_i1",
+        action="store_true",
+        help="If true, use only I1 term in IHA",
+    )
+    args.add_argument(
+        "--only_i2",
+        action="store_true",
+        help="If true, use only I2 term in IHA",
+    )
+    args.add_argument(
+        "--low_rank",
+        action="store_true",
+        help="If true, use low-rank approximation of Hessian. Else, use damping. Useful for inverse",
+    )
+    args.add_argument(
+        "--partial_model",
+        type=int,
+        default=None,
+        help="Part of model from this specified layer is treated as actual model. Helps in computation for Hessian-based attacks",
+    )
+    args.add_argument(
+        "--simulate_metaclf",
+        action="store_true",
+        help="If true, use scores as features and fit LOO-style meta-classifier for each target datapoint",
+    )
+    args.add_argument(
+        "--skip_save",
+        action="store_true",
+        help="If true, so not save scores to file",
+    )
+
+    args.add_argument("--sif_proper_mode", action="store_true", help="Tune 2 thresholds for SIF like original paper")
     args = args.parse_args()
+
+    if args.only_i1 and args.only_i2:
+        print("Both only_i1 and only_i2 can't be true. Choose one!")
+        exit(0)
 
     mp.set_start_method('spawn')
     main(args)

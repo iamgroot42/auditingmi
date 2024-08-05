@@ -53,8 +53,6 @@ class IHA(Attack):
         damping_eps = kwargs.get("damping_eps", 2e-1) # Damping (or cutoff for low-rank approximation)
         low_rank = kwargs.get("low_rank", False) # Use low-rank approximation for Hessian?
         tol = kwargs.get("tol", 1e-5) # Tolerance for CG solver (if approximate is True)
-
-        self.skip_reg_term = kwargs.get("skip_reg_term", False) # Skip the extra-computation regularization term?
         self.weight_decay = kwargs.get("weight_decay", 5e-4) # Weight decay used to train model
 
         if all_train_loader is None:
@@ -178,6 +176,12 @@ class IHA(Attack):
         is_train = kwargs.get("is_train", None) 
         momentum = kwargs.get("momentum", 0.9) # Momentum used to train model
 
+        skip_reg_term = kwargs.get("skip_reg_term", False)  # Skip the extra-computation regularization term?
+        skip_loss = kwargs.get("skip_loss", False)  # Skip loss, directly use (I1 + I2 + I3 + I4)?
+        get_individual_terms = kwargs.get("get_individual_terms", False) # Get terms I1-I4 as well?
+        only_i1 = kwargs.get("only_i1", False) # Only compute I1 term?
+        only_i2 = kwargs.get("only_i2", False)  # Only compute I2 term?
+
         if is_train is None:
             raise ValueError(f"{self.name} requires is_train to be specified (to compute L0 properly)")
         if learning_rate is None:
@@ -187,7 +191,11 @@ class IHA(Attack):
 
         # Factor out S/(2L*) parts out of both terms as common
         grad, ret_loss = self.get_specific_grad(x, y)
-        I1 = ret_loss / (1 + momentum)
+
+        if skip_loss:
+            I1 = 0
+        else:
+            I1 = ret_loss / (1 + momentum)
 
         if is_train:
             # Trick to skip computing L0 for all records. Compute L1 (across all data), and then directly calculate L0 using current grad
@@ -203,30 +211,55 @@ class IHA(Attack):
             # H-1 * grad(L0(z))
             ihvp_alldata   = self.ihvp_module.inverse_hvp(all_other_data_grad)
 
-            if self.weight_decay > 0 and not self.skip_reg_term:
+            if self.weight_decay > 0 and not skip_reg_term:
                 extra_ihvp = self.ihvp_module.inverse_hvp(datapoint_ihvp)
         else:
             # H-1 * grad(l(z))
             datapoint_ihvp = (self.H_inverse @ grad.cpu()).to(self.device, non_blocking=True)
             # H-1 * grad(L0(z))
             ihvp_alldata   = (self.H_inverse @ all_other_data_grad.cpu()).to(self.device)
-            if self.weight_decay > 0 and not self.skip_reg_term:
+            if self.weight_decay > 0 and not skip_reg_term:
                 extra_ihvp = (self.H_inverse @ datapoint_ihvp.cpu()).to(self.device, non_blocking=True)
 
         I2 = ch.dot(datapoint_ihvp, datapoint_ihvp).cpu().item() / num_samples
         I3 = ch.dot(ihvp_alldata, datapoint_ihvp).cpu().item() * 2
 
         extra_reg_term = 0
-        if self.weight_decay > 0 and not self.skip_reg_term:
+        if self.weight_decay > 0 and not skip_reg_term:
             I4 = ch.dot(datapoint_ihvp, extra_ihvp).cpu().item() / num_samples
             I5 = ch.dot(ihvp_alldata, extra_ihvp).cpu().item() * 2
-            extra_reg_term = - (I4 + I5) * self.weight_decay / learning_rate
+            extra_reg_term = - (I4 + I5) * self.weight_decay
 
         if self.weight_decay > 0:
-            scaling = (1 - ((learning_rate * self.weight_decay) / (1 + momentum))) / learning_rate
+            scaling = 1 - ((learning_rate * self.weight_decay) / (1 + momentum))
         else:
-            scaling = 1 / learning_rate
-        mi_score = I1 - ((I2 + I3) * scaling) + extra_reg_term
+            scaling = 1
+
+        if not skip_loss:
+            scaling /= learning_rate
+            extra_reg_term /= learning_rate
+
+        if only_i1:
+            mi_score = - I2
+        elif only_i2:
+            mi_score = - I3
+        else:
+            mi_score = I1 - ((I2 + I3) * scaling) + extra_reg_term
+
+        # Return individual scores, if requested
+        if get_individual_terms:
+            return_dict = {
+                "I2": I2 * scaling,
+                "I3": I3 * scaling,
+            }
+            if not skip_loss:
+                return_dict["I1"] = I1
+            if self.weight_decay > 0 and not skip_reg_term:
+                return_dict["I4"] = I4 * self.weight_decay / learning_rate
+                return_dict["I5"] = I5 * self.weight_decay / learning_rate
+
+            return return_dict
+
         return mi_score
 
 

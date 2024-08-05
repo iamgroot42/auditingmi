@@ -5,6 +5,9 @@ import os
 from multiprocessing import Process
 import torch as ch
 import dill
+import numpy as np
+import torch as ch
+from mib.models.utils import get_model
 
 
 # Read environment variables
@@ -86,3 +89,36 @@ class DillProcess(Process):
                 self._target
             )  # Unpickle the target function before executing
             self._target(*self._args, **self._kwargs)  # Execute the target function
+
+
+def load_ref_models(model_dir, args, num_classes: int):
+    if args.same_seed_ref:
+        folder_to_look_in = os.path.join(
+            model_dir, f"same_init/{args.target_model_index}"
+        )
+    else:
+        folder_to_look_in = model_dir
+
+    if args.specific_ref_folder is not None:
+        folder_to_look_in = os.path.join(folder_to_look_in, args.specific_ref_folder)
+
+    # Look specifically inside folder corresponding to this model's seed
+    ref_models, ref_indices = [], []
+    for m in os.listdir(folder_to_look_in):
+        # Skip if directory
+        if os.path.isdir(os.path.join(folder_to_look_in, m)):
+            continue
+
+        # Skip ref model if trained on exact same data split as target model
+        # if m.split(".pt")[0].split("_")[0] == f"{args.target_model_index}":
+        #    continue
+
+        model, _, _ = get_model(args.model_arch, num_classes)
+        state_dict = ch.load(os.path.join(folder_to_look_in, m))
+        ref_indices.append(state_dict["train_index"])
+        model.load_state_dict(state_dict["model"], strict=False)
+        model.eval()
+        ref_models.append(model)
+
+    ref_indices = np.array(ref_indices, dtype=object)
+    return ref_models, ref_indices

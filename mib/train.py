@@ -279,7 +279,10 @@ def main(save_dir: str, args):
     if same_init is not None:
         save_dir_use = os.path.join(save_dir_use, f"same_init/{same_init}")
     if skip_model is not None:
-        save_dir_use = os.path.join(save_dir_use, f"l_mode/{skip_model}/{skip_data_index}")
+        if args.l_out:
+            save_dir_use = os.path.join(save_dir_use, f"l_mode_out/{skip_model}")
+        else:
+            save_dir_use = os.path.join(save_dir_use, f"l_mode_in/{skip_model}/{skip_data_index}")
     if replica is not None:
         save_dir_use = os.path.join(save_dir_use, f"replica/{replica}/")
         # Load train_index, test_index corresponding to specified model
@@ -331,16 +334,15 @@ def main(save_dir: str, args):
         # Leave-one-out setting
         if skip_model is not None:
             # Look up training data of requested model (for leave-one-out setting)
-            train_index = ch.load(f"{save_dir}/{skip_model}.pt")["train_index"]
-            # Skip datapoint at index skip_data_index
-            train_index = np.delete(train_index, skip_data_index)
-            # No need to worry about test index
+            train_index = ch.load(f"{save_dir}/lr_{args.momentum}_wd_{args.weight_decay}/{skip_model}.pt")["train_index"]
+            # Skip datapoint at index skip_data_index, if in-model
+            if not args.l_out:
+                train_index = np.delete(train_index, skip_data_index)
 
         # Get loaders
         train_loader = get_loader(train_data, train_index, batch_size)
-        test_loader = get_loader(test_data, test_index, batch_size)
+        test_loader  = get_loader(test_data, test_index, batch_size)
         # Get loaders
-        # train_loader, test_loader = get_loaders(all_data, train_index, test_index, batch_size)
 
         # Train model
         model, best_acc, best_loss = train_model(
@@ -436,6 +438,11 @@ if __name__ == "__main__":
         default=None,
         help="See l_mode_ref_model",
     )
+    args.add_argument(
+        "--l_out",
+        action="store_true",
+        help="If True, train multiple models with the same dataa as model specified by l_mode_ref_model",
+    )
     args = args.parse_args()
 
     if args.num_train > args.num_models:
@@ -445,7 +452,8 @@ if __name__ == "__main__":
     if args.pick_mode not in ["best", "last", "last_n"]:
         raise ValueError("pick_mode must be 'best', 'last_n', or 'last'")
     if (args.l_mode_ref_model == None) != (args.l_mode_ref_point == None):
-        raise ValueError("l_mode_ref_model and l_mode_ref_point must be used together.")
+        if not args.l_out:
+            raise ValueError("l_mode_ref_model and l_mode_ref_point must be used together in LOO mode for member data.")
 
     save_dir = get_models_path()
     main(os.path.join(save_dir, args.dataset, args.model_arch), args)

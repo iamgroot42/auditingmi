@@ -35,24 +35,48 @@ ATTACKS_TO_PLOT = [
     "SIF_damping_0.2_lowrank_False",
     "Reference",
     "IHA_damping_0.2_lowrank_False",
+    "IHA_damping_0.1_lowrank_False",
+    "IHA_damping_0.01_lowrank_False",
     "IHA_approx_ihvp_0.2_tol_0.001",
+    "IHA_approx_ihvp_0.2_tol_0.0001",
+    "IHA_approx_ihvp_0.2_tol_1e-05",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.2",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.4",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.6",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.8",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.9",
+    "IHA_damping_0.2_lowrank_False_npoints_5000",
+    "IHA_damping_0.2_lowrank_False_skip_reg_term",
+    "IHA_damping_0.2_lowrank_False_skip_loss",
+    "IHA_damping_0.2_lowrank_False_skip_reg_term_skip_loss",
+    "IHA_damping_0.2_lowrank_False_only_i1",
+    "IHA_damping_0.2_lowrank_False_only_i2",
+    "Reference_npoints_500_l_mode",
 ]
 ATTACK_MAPPING = {
     "LOSS": "LOSS",
     "Reference": "Reference",
     "IHA": "IHA (Ours)",
     "IHA_damping_0.2_lowrank_False": "IHA (Ours)",
+    "IHA_damping_0.1_lowrank_False": "IHA (0.1)",
+    "IHA_damping_0.01_lowrank_False": "IHA (0.01)",
     "LiRAOnline": "LiRA",
     "SIF_damping_0.2_lowrank_False": "SIF",
     "IHA_approx_ihvp_0.2_tol_0.001": "IHA (CG)",
+    "IHA_approx_ihvp_0.2_tol_0.0001": "IHA (CG, 1e-4)",
+    "IHA_approx_ihvp_0.2_tol_1e-05": "IHA (CG, 1e-5)",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.2": "IHA (CG, 0.2)",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.4": "IHA (CG, 0.4)",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.6": "IHA (CG, 0.6)",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.8": "IHA (CG, 0.8)",
+    "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.9": "IHA (CG, 0.9)",
+    "IHA_damping_0.2_lowrank_False_npoints_5000": "IHA (Ours, 5000)",
+    "IHA_damping_0.2_lowrank_False_skip_reg_term": "IHA (no I3,I4)",
+    "IHA_damping_0.2_lowrank_False_skip_loss": "IHA (no loss)",
+    "IHA_damping_0.2_lowrank_False_skip_reg_term_skip_loss": "IHA (no I3,I4, loss)",
+    "IHA_damping_0.2_lowrank_False_only_i1": "IHA (only I1)",
+    "IHA_damping_0.2_lowrank_False_only_i2": "IHA (only I2)",
+    "Reference_npoints_500_l_mode": "LOO (500 points)"
 }
 COLOR_MAPPING = {
     "IHA (Ours)": 0,
@@ -100,6 +124,7 @@ def main(args):
             total_labels = [0] * len(signals_out) + [1] * len(signals_in)
 
             total_preds = np.concatenate((signals_out, signals_in))
+
             fpr, tpr, thresholds = roc_curve(total_labels, total_preds)
             roc_auc = auc(fpr, tpr)
 
@@ -113,12 +138,17 @@ def main(args):
                 "fpr": fpr,
                 "tpr": tpr,
             }
+            """
+            if model_index == "0":
+                print(ATTACK_MAPPING[attack_name], info_["roc_auc"], info_["tpr%%@0.01fpr"], info_["tpr%%@0.001fpr"])
+            """
             info[attack_name].append(info_)
+    # exit(0)
 
     # Print out attacks that have < 10 models for results
     for attack_name, info_ in info.items():
         # if len(info_) < 10:
-        if len(info_) < 3:
+        if len(info_) < 3 and "LOO" not in ATTACK_MAPPING[attack_name]:
             print(f"Ignore {attack_name} since it has results only for {len(info_)} models")
     print("\n\n")
 
@@ -156,7 +186,7 @@ def main(args):
             # "%s | AUC = %0.3f ±  %0.3f | TPR@0.1FPR=%0.3f ± %0.3f | TPR@0.01FPR=%0.3f ± %0.3f | TPR@0.001FPR=%0.3f ± %0.3f"
             "%s | AUC = %0.3f ±  %0.3f | TPR%%@1%%FPR=%0.2f ± %0.2f | TPR%%@0.1%%FPR=%0.2f ± %0.2f | TPR%%@0.01%%FPR=%0.2f ± %0.2f"
             % (
-                attack_name,
+                ATTACK_MAPPING[attack_name],
                 mean_auc,
                 np.std([i["roc_auc"] for i in info_]),
                 # np.mean([i["tpr@0.1fpr"] for i in info_]),
@@ -170,13 +200,19 @@ def main(args):
             )
         )
         if ATTACK_MAPPING[attack_name] not in COLOR_MAPPING:
-            print(f"WARNING: {attack_name} not in COLOR_MAPPING. Skipping")
+            print(f"\tWARNING: {attack_name} not in COLOR_MAPPING. Skipping")
+            continue
+
+        if args.noplot:
             continue
 
         fprs = info_[args.which_plot]["fpr"]
         tprs = info_[args.which_plot]["tpr"]
         plt.plot(fprs, tprs, label=ATTACK_MAPPING[attack_name], c=CB_colors[COLOR_MAPPING[ATTACK_MAPPING[attack_name]]])
         actually_plotted.append(ATTACK_MAPPING[attack_name])
+
+    if args.noplot:
+        exit(0)
 
     # Make sure plot directory exists
     if not os.path.exists(os.path.join(args.plotdir, args.dataset)):
@@ -226,6 +262,7 @@ if __name__ == "__main__":
     args.add_argument("--plotdir", type=str, default="./plots")
     args.add_argument("--which_plot", type=int, default=0, help="Plot TPR-FPR curves for this specific model")
     args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
+    args.add_argument("--noplot", action="store_true", help="Don't plot the ROC curve.")
     args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")
     args = args.parse_args()
     main(args)
