@@ -7,6 +7,7 @@ cifar-10-batches-py/*
 *.png
 *.log
 *.pdf
+*.pth
 
 .ipynb_checkpoints/*
 
@@ -20,3 +21,4 @@ lightning_logs/*
 
 saved_values/*
 auditing_signals/*
+slurm_logs/*

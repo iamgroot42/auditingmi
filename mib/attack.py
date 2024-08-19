@@ -18,7 +18,6 @@ from mib.attacks.utils import get_attack
 from mib.utils import get_signals_path, get_models_path, get_misc_path, DillProcess, load_ref_models
 from mib.train import get_loader
 
-
 from sklearn.ensemble import RandomForestClassifier
 
 """
@@ -210,6 +209,7 @@ def get_signals(return_dict,
             skip_loss=args.skip_loss,
             only_i1=args.only_i1,
             only_i2=args.only_i2,
+            i1i2_include_loss=args.i1i2_include_loss,
         )
         signals.append(score)
     prefix = "member" if is_train else "nonmember"
@@ -272,7 +272,8 @@ def main(args):
         args.num_points,
         args.exp_seed,
         num_nontrain_pool=num_nontrain_pool,
-        split_each_loader=args.num_parallel_each_loader
+        split_each_loader=args.num_parallel_each_loader,
+        l_mode=args.l_mode
     )
 
     hessian = None
@@ -431,12 +432,18 @@ def main(args):
 
     # Extract relevant data
     # Everything starting with "member_" is for member data, and "nonmember_" for non-member data
-    signals_in, signals_out = [], []
+    # Insert in order of process creation
+    signals_in, signals_out = [[] for _ in range(args.num_parallel_each_loader)], [[] for _ in range(args.num_parallel_each_loader)]
     for k, v in return_dict.items():
+        index = int(k.split("_")[-1])
         if k.startswith("member_"):
-            signals_in.extend(v)
+            signals_in[index] = v
         else:
-            signals_out.extend(v)
+            index -= args.num_parallel_each_loader
+            signals_out[index] = v
+    # Can not flatten out
+    signals_in  = np.concatenate(signals_in)
+    signals_out = np.concatenate(signals_out)
 
     """
     # Compute signals for member data
@@ -571,6 +578,11 @@ def main(args):
         attack_name += "_only_i1"
     if args.only_i2:
         attack_name += "_only_i2"
+    if args.i1i2_include_loss:
+        attack_name += "_include_loss"
+
+    if args.l_mode:
+        attack_name += "_l_mode"
 
     if args.simulate_metaclf:
         # Use a 2-depth decision tree to fit a meta-classifier
@@ -698,6 +710,11 @@ if __name__ == "__main__":
         help="Number of samples (in and out each) to use for computing signals",
     )
     args.add_argument(
+        "--l_mode",
+        action="store_true",
+        help="If true, use first n points as members",
+    )
+    args.add_argument(
         "--same_seed_ref",
         action="store_true",
         help="Use ref models with same seed as target model?",
@@ -715,8 +732,8 @@ if __name__ == "__main__":
         help="Custom suffix (folder) to load models from",
     )
     # Dataset/model related
-    args.add_argument("--model_arch", type=str, default="wide_resnet_28_2")
-    args.add_argument("--dataset", type=str, default="cifar10")
+    args.add_argument("--model_arch", type=str, default="mlp2")
+    args.add_argument("--dataset", type=str, default="purchase100_s")
     args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
     args.add_argument("--weight_decay", type=float, default=5e-4, help="Weight decay for SGD optimizer.")
     # Specific to IHA
@@ -760,6 +777,11 @@ if __name__ == "__main__":
         help="If true, use only I2 term in IHA",
     )
     args.add_argument(
+        "--i1i2_include_loss",
+        action="store_true",
+        help="Include loss with I1/I2? Only valid when only_i1 or only_i2 is used",
+    )
+    args.add_argument(
         "--low_rank",
         action="store_true",
         help="If true, use low-rank approximation of Hessian. Else, use damping. Useful for inverse",
@@ -786,6 +808,10 @@ if __name__ == "__main__":
 
     if args.only_i1 and args.only_i2:
         print("Both only_i1 and only_i2 can't be true. Choose one!")
+        exit(0)
+
+    if args.i1i2_include_loss and args.skip_loss:
+        print("Cannot include and exclude loss at the same time!")
         exit(0)
 
     mp.set_start_method('spawn')

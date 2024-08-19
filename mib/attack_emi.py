@@ -8,7 +8,7 @@ import torch as ch
 from scipy.stats import norm as Normal
 import numpy as np
 from tqdm import tqdm
-from typing import List
+import matplotlib.pyplot as plt
 
 from mib.models.utils import get_model
 from sklearn.metrics import auc
@@ -29,7 +29,9 @@ def get_signals(
     target_model,
     criterion,
     is_train: bool,
-    model_dir: str
+    model_dir: str,
+    ref_loss_fns_use=None,
+    check_indices=None,
 ):
 
     # Get LOSS attacker
@@ -44,43 +46,44 @@ def get_signals(
         loss_t = - target_loss.compute_scores(x, y)
         losses_record.append(loss_t)
 
-        ref_loss_fns_use = None
         if is_train:
             # If is_train, load up reference models
             this_dir = os.path.join(
                         model_dir, f"l_mode_in/{args.target_model_index}/{i}"
                     )
-            out_models_use, _ = load_ref_models(this_dir, args, ds.num_classes)
+            out_models_use, out_model_indices = load_ref_models(this_dir, args, ds.num_classes)
+            if check_indices is not None:
+                # Check that check_indices \ {check_indices[i]} == out_model_indices, set wise
+                # print(list(out_model_indices[0]))
+                # print(set([check_indices[i]]))
+                # print(set(check_indices).difference(set([check_indices[i]])))
+                assert set(check_indices).difference(set([check_indices[i]])) == set(list(out_model_indices[0])), "Indices don't match"
             ref_loss_fns_use = [get_attack("LOSS")(ref_model, criterion, device="cuda") for ref_model in out_models_use]
 
-            losses_ref.append([ -ref_loss_fn.compute_scores(x, y) for ref_loss_fn in ref_loss_fns_use])
+        # Add loss for reference models
+        losses_ref.append([ -ref_loss_fn.compute_scores(x, y) for ref_loss_fn in ref_loss_fns_use])
 
     losses_record = np.array(losses_record)
-    if not is_train:
-        return losses_record
-
     losses_ref = np.array(losses_ref)
+
     return losses_record, losses_ref
 
 
 def get_threshold_linear(scores, fp_rate):
-    return np.quantile(scores, fp_rate, method="linear")
+    # Add a [0] and [1000] to scores
+    scores_ = np.concatenate([[0.], scores, [1000.]])
+    return np.quantile(scores_, fp_rate, method="linear")
 
 
 def get_threshold_gaussian(scores, fp_rate):
-    logit_scaling = lambda x: np.log(np.exp(-x) / (1 - np.exp(-x)))
-    logit_scores = logit_scaling(scores)
+    scores_ = scores + 0.000001
+    logit_scores = np.log(np.divide(np.exp(-scores_), (1 - np.exp(-scores_))))
+    loc, scale = Normal.fit(logit_scores)
 
-    mean, std = np.mean(logit_scores), np.std(logit_scores)
-    # Define Normal distribution
-    percentile = Normal.ppf(
-        1 - fp_rate,
-        loc=mean,
-        scale=std,
-    )
+    threshold = Normal.ppf(1 - fp_rate, loc=loc, scale=scale)
+    # Reverse threshold
+    threshold = np.log(np.exp(threshold) + 1) - threshold
 
-    # Reverse the logit rescaling
-    threshold = -np.log(1 / (1 + np.exp(-percentile)))
     return threshold
 
 
@@ -150,6 +153,18 @@ def main(args):
         l_mode=True,
     )
 
+    # Load reference models
+    this_dir = os.path.join(model_dir, f"l_mode_out/{args.target_model_index}/")
+    ref_models, ref_indices = load_ref_models(this_dir, args, ds.num_classes)
+    # Assert all indices are the same (each row contains indices)
+    if not np.all([ref_indices[i] == train_index for i in range(len(ref_indices))]):
+        raise ValueError("Indices of reference models don't match")
+
+    ref_loss_fns_use = [
+        get_attack("LOSS")(ref_model, criterion, device="cuda")
+        for ref_model in ref_models
+    ]
+
     # Extract "later" part of model
     if args.partial_model is not None:
         model_for_ihvp = target_model.make_later_layer_model(args.partial_model + 1)
@@ -157,16 +172,18 @@ def main(args):
     else:
         model_for_ihvp = target_model
 
+    losses_nonmem, losses_ref_nonmem = get_signals(
+        args, nonmember_loader, 
+        ds, model_for_ihvp,
+        criterion, is_train=False,
+        model_dir=model_dir,
+        ref_loss_fns_use=ref_loss_fns_use)
     losses_mem, losses_ref_mem = get_signals(
         args, member_loader, 
         ds, model_for_ihvp,
         criterion, is_train=True,
-        model_dir=model_dir)
-    losses_nonmem = get_signals(
-        args, nonmember_loader, 
-        ds, model_for_ihvp,
-        criterion, is_train=False,
-        model_dir=model_dir)
+        check_indices=list(ref_indices[0]),
+        model_dir=model_dir,)
 
     # Assert length of signals is same
     if len(losses_mem) != len(losses_nonmem):
@@ -175,23 +192,55 @@ def main(args):
         )
         exit(0)
 
+    score_fn = get_threshold_linear
+    # score_fn = get_threshold_gaussian
+
     tprs, fprs = [], []
-    for fpr in np.linspace(0, 1.0, 1001):
-        fprs.append(fpr)
-        # Look at histogram of losses_ref_mem for each record and get threshold that provides that FPR
-        thresholds = np.array([get_threshold_linear(losses_ref_mem[i], fpr) for i in range(len(losses_ref_mem))])
-        # Compute TPR with these thresholds
-        tpr = (losses_mem <= thresholds).mean()
+    predictions = {}
+    for fpr in np.logspace(-5,0,1000):
+        # Look at histogram of losses_ref_mem for each record and get threshold that tries to provide that FPR
+        thresholds = np.array([score_fn(losses_ref_mem[i], fpr) for i in range(len(losses_ref_mem))])
+        preds_mem = (losses_mem <= thresholds)
+        tpr = preds_mem.mean()
         tprs.append(tpr)
+
+        # Compute thresholds for non-member data
+        thresholds_nonmem = np.array([score_fn(losses_ref_nonmem[i], fpr) for i in range(len(losses_ref_nonmem))])
+        preds_nonmem = (losses_nonmem <= thresholds_nonmem)
+        fpr_actual = preds_nonmem.mean()
+        fprs.append(fpr_actual)
+
+        # Store all predictions (nonmem, mem) together
+        predictions[fpr_actual] = np.concatenate([preds_nonmem, preds_mem])
 
     # Compute AUC
     roc_auc = auc(fprs, tprs)
+    tprs, fprs = np.array(tprs), np.array(fprs)
 
     # Print out ROC
     print(f"ROC AUC: {roc_auc}")
+
+    # Store predictions
+    if not args.skip_save:
+        # Save via torch
+        save_path = os.path.join(
+            ".", f"predictions_{args.dataset}_{args.model_arch}_{args.num_points}_loo.pth"
+        )
+        # Save this file
+        ch.save(predictions, save_path)
+
     # Also print out TPR at 1% and 0.1% FPR
-    print(f"TPR at 1% FPR: {tprs[fprs.index(0.01)]}")
-    print(f"TPR at 0.1% FPR: {tprs[fprs.index(0.001)]}")
+    def get_tpr(upper_bound):
+        return tprs[np.where(fprs < upper_bound)[0][-1]]
+
+    print(f"TPR at 5% FPR: {get_tpr(0.05)}")
+    print(f"TPR at 30% FPR: {get_tpr(0.3)}")
+
+    # Plot ROC
+    plt.plot(fprs, tprs)
+    plt.xlabel("FPR")
+    plt.ylabel("TPR")
+    plt.savefig("L_mode.png")
 
 
 if __name__ == "__main__":
@@ -207,7 +256,7 @@ if __name__ == "__main__":
     args.add_argument(
         "--num_points",
         type=int,
-        default=500,
+        default=100,
         help="Number of samples (in and out each) to use for computing signals",
     )
     args.add_argument(
@@ -228,8 +277,8 @@ if __name__ == "__main__":
         help="Custom suffix (folder) to load models from",
     )
     # Dataset/model related
-    args.add_argument("--model_arch", type=str, default="wide_resnet_28_2")
-    args.add_argument("--dataset", type=str, default="cifar10")
+    args.add_argument("--model_arch", type=str, default="mlp2")
+    args.add_argument("--dataset", type=str, default="purchase100_s")
     args.add_argument(
         "--momentum", type=float, default=0.9, help="Momentum for SGD optimizer."
     )

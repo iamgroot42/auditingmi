@@ -1,6 +1,6 @@
 from mib.dataset.cifar10 import CIFAR10
 from mib.dataset.cifar100 import CIFAR100
-from mib.dataset.purchase100 import Purchase100, Purchase100Small
+from mib.dataset.purchase100 import Purchase100, Purchase100Small, Purchase100VerySmall
 from mib.dataset.mnist import MNIST17, MNISTOdd
 from mib.dataset.fashionmnist import FMNISTUpperFoot, FMNIST
 
@@ -9,6 +9,7 @@ DATASET_MAPPING = {
     "cifar100": CIFAR100,
     "purchase100": Purchase100,
     "purchase100_s": Purchase100Small,
+    "purchase100_xs": Purchase100VerySmall,
     "mnist17": MNIST17,
     "mnistodd": MNISTOdd,
     "fmnistuf": FMNISTUpperFoot,

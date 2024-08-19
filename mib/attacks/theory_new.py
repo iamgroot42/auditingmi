@@ -99,7 +99,6 @@ class IHA(Attack):
                 damp=damping_eps,
                 tol=tol,
             )
-            # """
         else:
             if hessian is None:
                 exact_H = compute_hessian(
@@ -173,7 +172,7 @@ class IHA(Attack):
         x, y = x.to(self.device), y.to(self.device)
         learning_rate = kwargs.get("learning_rate", None) # Learning rate used to train model
         num_samples = kwargs.get("num_samples", None)
-        is_train = kwargs.get("is_train", None) 
+        is_train = kwargs.get("is_train", None)
         momentum = kwargs.get("momentum", 0.9) # Momentum used to train model
 
         skip_reg_term = kwargs.get("skip_reg_term", False)  # Skip the extra-computation regularization term?
@@ -181,6 +180,7 @@ class IHA(Attack):
         get_individual_terms = kwargs.get("get_individual_terms", False) # Get terms I1-I4 as well?
         only_i1 = kwargs.get("only_i1", False) # Only compute I1 term?
         only_i2 = kwargs.get("only_i2", False)  # Only compute I2 term?
+        i1i2_include_loss = kwargs.get("i1i2_include_loss", False) # When using only_i1 or only_i2, include loss?
 
         if is_train is None:
             raise ValueError(f"{self.name} requires is_train to be specified (to compute L0 properly)")
@@ -228,7 +228,11 @@ class IHA(Attack):
         if self.weight_decay > 0 and not skip_reg_term:
             I4 = ch.dot(datapoint_ihvp, extra_ihvp).cpu().item() / num_samples
             I5 = ch.dot(ihvp_alldata, extra_ihvp).cpu().item() * 2
-            extra_reg_term = - (I4 + I5) * self.weight_decay
+            # Old (unnecessary approximation)
+            # multiplier = self.weight_decay * 2
+            # Correct
+            multiplier = (self.weight_decay / 2) * (2 - ((learning_rate * self.weight_decay) / (1 + momentum)))
+            extra_reg_term = -(I4 + I5) * multiplier
 
         if self.weight_decay > 0:
             scaling = 1 - ((learning_rate * self.weight_decay) / (1 + momentum))
@@ -240,9 +244,15 @@ class IHA(Attack):
             extra_reg_term /= learning_rate
 
         if only_i1:
-            mi_score = - I2
+            if i1i2_include_loss:
+                mi_score = I1 - (I2 * scaling)
+            else:
+                mi_score = - I2
         elif only_i2:
-            mi_score = - I3
+            if i1i2_include_loss:
+                mi_score = I1 - (I3 * scaling)
+            else:
+                mi_score = - I3
         else:
             mi_score = I1 - ((I2 + I3) * scaling) + extra_reg_term
 

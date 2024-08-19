@@ -404,8 +404,8 @@ def main(save_dir: str, args):
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
-    args.add_argument("--model_arch", type=str, default="wide_resnet_28_2")
-    args.add_argument("--dataset", type=str, default="cifar10")
+    args.add_argument("--model_arch", type=str, default="mlp2")
+    args.add_argument("--dataset", type=str, default="purchase100_s")
     args.add_argument("--ddp", action="store_true", help="Use DDP for training")
     args.add_argument("--data_seed", type=int, default=2024)
     args.add_argument("--num_models", type=int, default=128, help="Total number of models (data splits will be created accordingly)")

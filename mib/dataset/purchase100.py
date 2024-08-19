@@ -85,3 +85,22 @@ class Purchase100Small(Dataset):
         test_data = ch.utils.data.TensorDataset(test_data, test_labels)
 
         super().__init__("Purchase100Small", train_data, test_data, num_classes=100)
+
+
+class Purchase100VerySmall(Dataset):
+    def __init__(self, augment: bool = True):
+        num_train = 10_000
+        # Double to account for pkeep=0.5
+        (train_data, train_labels), (test_data, test_labels) = load_purchase100_file(
+            "purchase100_xs", num_train * 2
+        )
+
+        # Convert to torch datasets
+        train_data = ch.from_numpy(train_data)
+        train_labels = ch.from_numpy(train_labels)
+        test_data = ch.from_numpy(test_data)
+        test_labels = ch.from_numpy(test_labels)
+        train_data = ch.utils.data.TensorDataset(train_data, train_labels)
+        test_data = ch.utils.data.TensorDataset(test_data, test_labels)
+
+        super().__init__("Purchase100VerySmall", train_data, test_data, num_classes=100)

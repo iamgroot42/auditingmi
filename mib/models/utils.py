@@ -67,10 +67,21 @@ MODEL_MAPPING = {
             (
                 600,
                 [512, 256, 128, 64],
-            ),  
+            ),
         ),
         "criterion": nn.CrossEntropyLoss(),
         "hparams": {"batch_size": 256, "learning_rate": 0.01, "epochs": 200},
+    },
+    "mlp4_p100xs": {
+        "model": (
+            MLP,
+            (
+                600,
+                [512, 256, 128, 64],
+            ),
+        ),
+        "criterion": nn.CrossEntropyLoss(),
+        "hparams": {"batch_size": 256, "learning_rate": 0.01, "epochs": 100},
     },
     "mlp3": {
         "model": (
@@ -163,9 +174,9 @@ MODEL_MAPPING = {
         # 4.7s/it
         "model": (CNN, (3, 32, "max", 3)),
         "criterion": nn.CrossEntropyLoss(),
-        # 500e - 
-        # 200e - 
-        # 100e - 
+        # 500e -
+        # 200e -
+        # 100e -
         "hparams": {"batch_size": 256, "learning_rate": 0.1, "epochs": 100},
     },
     "cnn32_3_avg": {

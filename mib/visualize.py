@@ -46,12 +46,16 @@ ATTACKS_TO_PLOT = [
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.8",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.9",
     "IHA_damping_0.2_lowrank_False_npoints_5000",
+    "IHA_approx_ihvp_1.0_tol_0.001_npoints_5000",
+    "IHA_approx_ihvp_0.5_tol_0.001_npoints_5000",
     "IHA_damping_0.2_lowrank_False_skip_reg_term",
     "IHA_damping_0.2_lowrank_False_skip_loss",
     "IHA_damping_0.2_lowrank_False_skip_reg_term_skip_loss",
     "IHA_damping_0.2_lowrank_False_only_i1",
     "IHA_damping_0.2_lowrank_False_only_i2",
     "Reference_npoints_500_l_mode",
+    "IHA_damping_0.2_lowrank_False_only_i1_include_loss",
+    "IHA_damping_0.2_lowrank_False_only_i2_include_loss",
 ]
 ATTACK_MAPPING = {
     "LOSS": "LOSS",
@@ -71,12 +75,16 @@ ATTACK_MAPPING = {
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.8": "IHA (CG, 0.8)",
     "IHA_approx_ihvp_0.2_tol_0.001_subsample_0.9": "IHA (CG, 0.9)",
     "IHA_damping_0.2_lowrank_False_npoints_5000": "IHA (Ours, 5000)",
+    "IHA_approx_ihvp_1.0_tol_0.001_npoints_5000": "IHA (Ours, 5000, 1e0)",
+    "IHA_approx_ihvp_0.5_tol_0.001_npoints_5000": "IHA (Ours, 5000, 5e-1)",
     "IHA_damping_0.2_lowrank_False_skip_reg_term": "IHA (no I3,I4)",
     "IHA_damping_0.2_lowrank_False_skip_loss": "IHA (no loss)",
     "IHA_damping_0.2_lowrank_False_skip_reg_term_skip_loss": "IHA (no I3,I4, loss)",
     "IHA_damping_0.2_lowrank_False_only_i1": "IHA (only I1)",
     "IHA_damping_0.2_lowrank_False_only_i2": "IHA (only I2)",
-    "Reference_npoints_500_l_mode": "LOO (500 points)"
+    "Reference_npoints_500_l_mode": "LOO (500 points)",
+    "IHA_damping_0.2_lowrank_False_only_i1_include_loss": "IHA (I1 and loss)",
+    "IHA_damping_0.2_lowrank_False_only_i2_include_loss": "IHA (I2 and loss)",
 }
 COLOR_MAPPING = {
     "IHA (Ours)": 0,
