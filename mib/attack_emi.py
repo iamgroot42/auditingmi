@@ -1,5 +1,5 @@
 """
-    File to run L-attack using 'Enhanced Membership Infernece' work
+    File to run L-attack using 'Enhanced Membership Inference' work
     Computes threshold at given FPR using reference models, instead of direct calibration.
 """
 import argparse
@@ -11,9 +11,10 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 from mib.models.utils import get_model
-from sklearn.metrics import auc
+from sklearn.metrics import auc, roc_curve
 from mib.dataset.utils import get_dataset
 from mib.attacks.utils import get_attack
+from mib.attacks.attack_utils import compute_scaled_logit
 from mib.utils import (
     get_models_path,
     load_ref_models,
@@ -41,9 +42,13 @@ def get_signals(
 
     # Compute signals for member data
     for i, (x, y) in tqdm(enumerate(loader), total=len(loader), desc="Member" if is_train else "Non-member"):
+        x_, y_ = x.cuda(), y.cuda()
 
         # Collect loss for target model
-        loss_t = - target_loss.compute_scores(x, y)
+        if args.lira_offline_simulate:
+            loss_t = compute_scaled_logit(target_model, x_, y_)[0]
+        else:
+            loss_t = - target_loss.compute_scores(x, y)
         losses_record.append(loss_t)
 
         if is_train:
@@ -61,7 +66,15 @@ def get_signals(
             ref_loss_fns_use = [get_attack("LOSS")(ref_model, criterion, device="cuda") for ref_model in out_models_use]
 
         # Add loss for reference models
-        losses_ref.append([ -ref_loss_fn.compute_scores(x, y) for ref_loss_fn in ref_loss_fns_use])
+        losses_ref_point = []
+        for ref_loss_fn in ref_loss_fns_use:
+            if args.lira_offline_simulate:
+                losses_ref_point.append(compute_scaled_logit(ref_loss_fn.model, x_, y_)[0])
+            else:
+                # Use loss directly
+                losses_ref_point.append(-ref_loss_fn.compute_scores(x, y))
+
+        losses_ref.append(losses_ref_point)
 
     losses_record = np.array(losses_record)
     losses_ref = np.array(losses_ref)
@@ -192,30 +205,65 @@ def main(args):
         )
         exit(0)
 
-    score_fn = get_threshold_linear
-    # score_fn = get_threshold_gaussian
-
     tprs, fprs = [], []
     predictions = {}
-    for fpr in np.logspace(-5,0,1000):
-        # Look at histogram of losses_ref_mem for each record and get threshold that tries to provide that FPR
-        thresholds = np.array([score_fn(losses_ref_mem[i], fpr) for i in range(len(losses_ref_mem))])
-        preds_mem = (losses_mem <= thresholds)
-        tpr = preds_mem.mean()
-        tprs.append(tpr)
+    if args.lira_offline_simulate:
+        # LiRA-Offline Style
+        def lira_offline(X, X_ref):
+            mean_out = np.median(X_ref, 1)
+            fix_variance = True
+            if fix_variance:
+                std_out = np.std(X_ref)
+            else:
+                std_out = np.std(X_ref, 1)
+            scores = []
+            for i, oc in enumerate(X):
+                pr_out = Normal.logpdf(oc, mean_out[i], std_out + 1e-30)
+                print(pr_out)
+                scores.append(pr_out)
+            return np.array(scores)
 
-        # Compute thresholds for non-member data
-        thresholds_nonmem = np.array([score_fn(losses_ref_nonmem[i], fpr) for i in range(len(losses_ref_nonmem))])
-        preds_nonmem = (losses_nonmem <= thresholds_nonmem)
-        fpr_actual = preds_nonmem.mean()
-        fprs.append(fpr_actual)
+        preds_in = lira_offline(losses_mem, losses_ref_mem)
+        preds_out = lira_offline(losses_nonmem, losses_ref_nonmem)
 
-        # Store all predictions (nonmem, mem) together
-        predictions[fpr_actual] = np.concatenate([preds_nonmem, preds_mem])
+        print(preds_in, preds_out)
 
-    # Compute AUC
-    roc_auc = auc(fprs, tprs)
-    tprs, fprs = np.array(tprs), np.array(fprs)
+        total_preds = np.concatenate([preds_out, preds_in])
+        total_labels = np.concatenate([np.zeros_like(preds_out), np.ones_like(preds_in)])
+
+        fprs, tprs, thresholds = roc_curve(total_labels, total_preds)
+        roc_auc = auc(fprs, tprs)
+
+        # Take note of predictions at each FPR
+        for fpr in np.logspace(-5,0,1000):
+            threshold = thresholds[np.where(fprs < fpr)[0][-1]]
+            predictions[fpr] = total_preds <= threshold
+
+    else:
+        # L-Attack Style
+
+        score_fn = get_threshold_linear
+        # score_fn = get_threshold_gaussian
+
+        for fpr in np.logspace(-5,0,1000):
+            # Look at histogram of losses_ref_mem for each record and get threshold that tries to provide that FPR
+            thresholds = np.array([score_fn(losses_ref_mem[i], fpr) for i in range(len(losses_ref_mem))])
+            preds_mem = (losses_mem <= thresholds)
+            tpr = preds_mem.mean()
+            tprs.append(tpr)
+
+            # Compute thresholds for non-member data
+            thresholds_nonmem = np.array([score_fn(losses_ref_nonmem[i], fpr) for i in range(len(losses_ref_nonmem))])
+            preds_nonmem = (losses_nonmem <= thresholds_nonmem)
+            fpr_actual = preds_nonmem.mean()
+            fprs.append(fpr_actual)
+
+            # Store all predictions (nonmem, mem) together
+            predictions[fpr_actual] = np.concatenate([preds_nonmem, preds_mem])
+
+        # Compute AUC
+        roc_auc = auc(fprs, tprs)
+        tprs, fprs = np.array(tprs), np.array(fprs)
 
     # Print out ROC
     print(f"ROC AUC: {roc_auc}")
@@ -223,8 +271,9 @@ def main(args):
     # Store predictions
     if not args.skip_save:
         # Save via torch
+        lira_suffix = "_lira_offline_simulate" if args.lira_offline_simulate else ""
         save_path = os.path.join(
-            ".", f"predictions_{args.dataset}_{args.model_arch}_{args.num_points}_loo.pth"
+            ".", f"predictions_{args.dataset}_{args.model_arch}_{args.num_points}_loo{lira_suffix}.pth"
         )
         # Save this file
         ch.save(predictions, save_path)
@@ -240,7 +289,7 @@ def main(args):
     plt.plot(fprs, tprs)
     plt.xlabel("FPR")
     plt.ylabel("TPR")
-    plt.savefig("L_mode.png")
+    plt.savefig(f"L_mode_{args.lira_offline_simulate}.png")
 
 
 if __name__ == "__main__":
@@ -295,20 +344,14 @@ if __name__ == "__main__":
         help="Part of model from this specified layer is treated as actual model. Helps in computation for Hessian-based attacks",
     )
     args.add_argument(
-        "--simulate_metaclf",
-        action="store_true",
-        help="If true, use scores as features and fit LOO-style meta-classifier for each target datapoint",
-    )
-    args.add_argument(
         "--skip_save",
         action="store_true",
         help="If true, so not save scores to file",
     )
-
     args.add_argument(
-        "--sif_proper_mode",
+        "--lira_offline_simulate",
         action="store_true",
-        help="Tune 2 thresholds for SIF like original paper",
+        help="If true, use reference-model scores to perform a LiRA-Offline attack",
     )
     args = args.parse_args()
 
