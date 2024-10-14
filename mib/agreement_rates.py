@@ -20,17 +20,13 @@ def main(args):
         f"{args.target_model_index}",
     )
 
-    predictions_at_5p_fpr = {"member": {}, "non_member": {}}
-    predictions_at_30p_fpr = {"member": {}, "non_member": {}}
+    predictions_at_given_fpr = {"member": {}, "non_member": {}}
 
     # Ground-truth
-    predictions_at_5p_fpr["member"]["GT"] = np.ones(args.num_points)
-    predictions_at_5p_fpr["non_member"]["GT"] = np.zeros(args.num_points)
-    predictions_at_30p_fpr["member"]["GT"] = np.ones(args.num_points)
-    predictions_at_30p_fpr["non_member"]["GT"] = np.zeros(args.num_points)
+    predictions_at_given_fpr["member"]["GT"] = np.ones(args.num_points)
+    predictions_at_given_fpr["non_member"]["GT"] = np.zeros(args.num_points)
 
-    fpr_low = 0.01
-    fpr_high = 0.1
+    target_fpr = args.target_fpr
 
     # Load all other attacks
     for attack in os.listdir(signals_path):
@@ -52,19 +48,14 @@ def main(args):
         print(f"{attack_name} AUC: {auc_score}")
 
         # Thresholds
-        fpr_5p_threshold = thresholds[np.where(np.array(fpr) < fpr_low)[0][-1]]
-        fpr_30p_threshold = thresholds[np.where(np.array(fpr) < fpr_high)[0][-1]]
+        fpr_threshold = thresholds[np.where(np.array(fpr) < target_fpr)[0][-1]]
         # Predictions for members
-        member_preds_at_5p_fpr = signals_in >= fpr_5p_threshold
-        member_preds_at_30p_fpr = signals_in >= fpr_30p_threshold
+        member_preds_at_given_fpr = signals_in >= fpr_threshold
         # Predictions for non-members
-        non_member_preds_at_5p_fpr = signals_out >= fpr_5p_threshold
-        non_member_preds_at_30p_fpr = signals_out >= fpr_30p_threshold
+        non_member_preds_at_given_fpr = signals_out >= fpr_threshold
         # Store them
-        predictions_at_5p_fpr["member"][attack_name] = member_preds_at_5p_fpr
-        predictions_at_5p_fpr["non_member"][attack_name] = non_member_preds_at_5p_fpr
-        predictions_at_30p_fpr["member"][attack_name] = member_preds_at_30p_fpr
-        predictions_at_30p_fpr["non_member"][attack_name] = non_member_preds_at_30p_fpr
+        predictions_at_given_fpr["member"][attack_name] = member_preds_at_given_fpr
+        predictions_at_given_fpr["non_member"][attack_name] = non_member_preds_at_given_fpr
 
     print("\n\n######\n\n")
     # Load up file for L-attack predictions, directly read out predictions for desired FPR
@@ -75,29 +66,33 @@ def main(args):
     def get_tpr(upper_bound):
         return actual_fprs[np.where(actual_fprs < upper_bound)[0][-1]]
 
-    actual_fpr_5p = get_tpr(fpr_low)
-    actual_fpr_30p = get_tpr(fpr_high)
-    predictions_at_5p_fpr["non_member"]["L-attack"] = loo_dict[actual_fpr_5p][:args.num_points]
-    predictions_at_5p_fpr["member"]["L-attack"] = loo_dict[actual_fpr_5p][args.num_points:]
-    predictions_at_30p_fpr["non_member"]["L-attack"] = loo_dict[actual_fpr_30p][:args.num_points]
-    predictions_at_30p_fpr["member"]["L-attack"] = loo_dict[actual_fpr_30p][args.num_points:]
+    actual_fpr_given = get_tpr(target_fpr)
+    predictions_at_given_fpr["non_member"]["L-attack"] = loo_dict[actual_fpr_given][:args.num_points]
+    predictions_at_given_fpr["member"]["L-attack"] = loo_dict[actual_fpr_given][args.num_points:]
 
-    # For 5% and 30% FPR, compute pairw-se agreement between each attack for members non-members
-    attack_names = list(predictions_at_5p_fpr["member"].keys())
+    # If Lira-L predictions available, load them too
+    lira_l_path = f"./predictions_{args.dataset}_{args.model_arch}_{args.num_points}_loo_lira_offline_simulate.pth"
+    if os.path.exists(lira_l_path):
+        lira_loo_dict = ch.load(lira_l_path)
+        actual_fprs = np.array(list(lira_loo_dict.keys()))
+
+        actual_fpr_given = actual_fprs[np.where(actual_fprs < target_fpr)[0][-1]]
+
+        predictions_at_given_fpr["non_member"]["LiRA-L"] = lira_loo_dict[actual_fpr_given][:args.num_points]
+        predictions_at_given_fpr["member"]["LiRA-L"] = lira_loo_dict[actual_fpr_given][args.num_points:]
+
+    # For target FPR, compute pair-wise agreement between each attack for members non-members
+    attack_names = list(predictions_at_given_fpr["member"].keys())
     for i in range(len(attack_names)):
         for j in range(i+1, len(attack_names)):
             attack_1 = attack_names[i]
             attack_2 = attack_names[j]
-            # Agreement for members at 5% FPR
-            member_agreement_5p = np.mean(predictions_at_5p_fpr["member"][attack_1] == predictions_at_5p_fpr["member"][attack_2])
-            # Agreement for non-members at 5% FPR
-            non_member_agreement_5p = np.mean(predictions_at_5p_fpr["non_member"][attack_1] == predictions_at_5p_fpr["non_member"][attack_2])
-            # Agreement for members at 30% FPR
-            member_agreement_30p = np.mean(predictions_at_30p_fpr["member"][attack_1] == predictions_at_30p_fpr["member"][attack_2])
-            # Agreement for non-members at 30% FPR
-            non_member_agreement_30p = np.mean(predictions_at_30p_fpr["non_member"][attack_1] == predictions_at_30p_fpr["non_member"][attack_2])
-            print(f"{attack_1} & {attack_2} | 5%FPR: member {member_agreement_5p}, non-member {non_member_agreement_5p} | 30%FPR: member {member_agreement_30p}, non-member {non_member_agreement_30p}")
-        print()
+            # Agreement for members at given FPR
+            member_agreement_given_fpr = np.mean(predictions_at_given_fpr["member"][attack_1] == predictions_at_given_fpr["member"][attack_2])
+            # Agreement for non-members at given FPR
+            non_member_agreement_given_fpr = np.mean(predictions_at_given_fpr["non_member"][attack_1] == predictions_at_given_fpr["non_member"][attack_2])
+            print(f"{attack_1} & {attack_2} | {100*target_fpr}%FPR: member {member_agreement_given_fpr}, non-member {non_member_agreement_given_fpr}")
+        print("\n")
 
 
 if __name__ == "__main__":
@@ -108,6 +103,7 @@ if __name__ == "__main__":
     args.add_argument("--dataset", type=str, default="purchase100_s")
     args.add_argument("--plotdir", type=str, default="./plots")
     args.add_argument("--momentum", type=float, default=0.9, help="Momentum for SGD optimizer.")
+    args.add_argument("--target_fpr", type=float, help="FPR for which prediction similarity is to be studied")
     args.add_argument(
         "--weight_decay",
         type=float,

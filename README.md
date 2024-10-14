@@ -58,8 +58,8 @@ To generate scores for the L-attack (LOO setting), use
 python mib/attack_emi.py --dataset purchase100_s --model_arch mlp2
 ```
 
-Then, to look at agreement rates between attacks, use
+Then, to look at agreement rates between attacks (for e.g. for 5% FPR), use
 
 ```
-python mib/agreement_rates.py --dataset purchase100_s --model_arch mlp2
+python mib/agreement_rates.py --dataset purchase100_s --model_arch mlp2 --target_fpr 0.05
 ```

@@ -208,6 +208,7 @@ def main(args):
     tprs, fprs = [], []
     predictions = {}
     if args.lira_offline_simulate:
+
         # LiRA-Offline Style
         def lira_offline(X, X_ref):
             mean_out = np.median(X_ref, 1)
@@ -218,15 +219,19 @@ def main(args):
                 std_out = np.std(X_ref, 1)
             scores = []
             for i, oc in enumerate(X):
-                pr_out = Normal.logpdf(oc, mean_out[i], std_out + 1e-30)
-                print(pr_out)
+                if fix_variance:
+                    std_use = std_out
+                else:
+                    std_use = std_out[i]
+
+                pr_out = Normal.logpdf(oc, mean_out[i], std_use + 1e-30)
+
                 scores.append(pr_out)
-            return np.array(scores)
 
-        preds_in = lira_offline(losses_mem, losses_ref_mem)
+            return - np.array(scores)
+
+        preds_in  = lira_offline(losses_mem, losses_ref_mem)
         preds_out = lira_offline(losses_nonmem, losses_ref_nonmem)
-
-        print(preds_in, preds_out)
 
         total_preds = np.concatenate([preds_out, preds_in])
         total_labels = np.concatenate([np.zeros_like(preds_out), np.ones_like(preds_in)])
