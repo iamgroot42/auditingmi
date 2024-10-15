@@ -212,7 +212,7 @@ def main(args):
         # LiRA-Offline Style
         def lira_offline(X, X_ref):
             mean_out = np.median(X_ref, 1)
-            fix_variance = True
+            fix_variance = False #True
             if fix_variance:
                 std_out = np.std(X_ref)
             else:

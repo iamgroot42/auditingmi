@@ -55,7 +55,7 @@ Print AUCs, TPR at certain FPRs, and generate ROC curves (for normal and low-FPR
 To generate scores for the L-attack (LOO setting), use
 
 ```
-python mib/attack_emi.py --dataset purchase100_s --model_arch mlp2
+python mib/attack_loo.py --dataset purchase100_s --model_arch mlp2
 ```
 
 Then, to look at agreement rates between attacks (for e.g. for 5% FPR), use
